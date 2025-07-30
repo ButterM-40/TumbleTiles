@@ -1556,7 +1556,7 @@ Shift + Right-Click:
 
                 # print "Removing tile at ", x + self.CURRENTSELECTIONX, ", ", y + self.CURRENTSELECTIONY
                 # self.removeTileAtPos(self.CURRENTSELECTIONX + x,self.CURRENTSELECTIONY + y, False)
-                self.addTileAtPos(newX, newY)
+                self.addTileAtPos(newX, newY, False)
                         
 
         # print("fill in")
@@ -1580,6 +1580,7 @@ Shift + Right-Click:
         #         self.addTileAtPos(newX, newY)
                         
 
+        self.verifyTileLocations()
         self.redrawPrev()
         self.board.remapArray()
                 
@@ -1736,7 +1737,7 @@ Shift + Right-Click:
 
         
 
-    def addTileAtPos(self, f_x: float, f_y: float):
+    def addTileAtPos(self, f_x: float, f_y: float, refresh: bool=True):
         x = int(f_x)
         y = int(f_y)
         
@@ -1764,9 +1765,9 @@ Shift + Right-Click:
             self.board.coordToTile[x][y]= newConcTile
 
 
-
-        # self.verifyTileLocations()
-        self.redrawPrev()
+        if refresh:
+            self.verifyTileLocations()
+            self.redrawPrev()
 
 
     

@@ -308,7 +308,7 @@ class Board:
             if self.coordToTile[t.x][t.y] == None:
                     self.coordToTile[t.x][t.y] = t
                     self.ConcreteTiles.append(t)
-            elif DEBUGGING:
+            elif DEBUGGING: # jesus christ 
                 print("tumbletiles.py - Board.AddConc(): Can not add tile. A tile already exists at this location - Line ", lineno(), "\n", end=' ')
 
         except IndexError:
