@@ -9,6 +9,8 @@ import copy
 import sys
 import inspect
 import random
+from time import time
+from typing import Generator
 
 
 DEBUGGING = False
@@ -31,6 +33,24 @@ def lineno():
     return inspect.currentframe().f_back.f_lineno
 
 #tile class for individual tiles
+
+# A unique identifier counter for all tiles
+TILE_ID_COUNTER = 0
+
+def static_vars(**kwargs):
+    def decorate(func):
+        for k in kwargs:
+            setattr(func, k, kwargs[k])
+        return func
+    return decorate
+
+@static_vars(max_uid=0)
+def get_next_uid() -> int:
+    """Generate a unique identifier. Incremental."""
+    get_next_uid.max_uid += 1
+    return get_next_uid.max_uid
+
+
 class Tile:
     def __init__(self):
         global COLOR
@@ -41,6 +61,8 @@ class Tile:
         self.color = COLOR[0]
         self.glues = ['N','E','S','W']
         self.isConcrete = False
+        self.uid = get_next_uid()
+        self.name = ""
 
     def __init__(self,s,r,c,g):
         self.symbol = s
@@ -50,6 +72,8 @@ class Tile:
         self.y = c
         self.glues = g
         self.isConcrete = False
+        self.uid = get_next_uid()
+        self.name = ""
         
     def __init__(self, parent, s,r,c,g,color, isConcrete):
         self.parent = parent #polyomino that this tile is a part of
@@ -58,6 +82,8 @@ class Tile:
         self.color = color
         self.x = int(r)
         self.y = int(c)
+        self.uid = get_next_uid()
+        self.name = ""
 
 
         # Check for the case that isConcrete might be passed as a String if being read from an xml file
@@ -73,6 +99,7 @@ class Tile:
             self.glues = g
 
         
+
 
         
 #tiles must be part of a polyomino
@@ -185,12 +212,20 @@ class Polyomino:
                 closest = False
 
         return closest
-        
+
+
+# TODO: Move this to main (?)
+class TkUpdateQuery:
+    def __init__(self, method, *args):
+        self.method = method 
+        self.args = args 
+
 class Board:
     #constructor for polyomino, assigns the size of Rows and Colums and creates an empty board
     def __init__(self,R,C):
-        self.rectangles = []
-        self.glueText = []
+        self.rectangles = {} # Indexed by tile UID 
+        self.glueText = {}   # Indexed by tile UID
+        self.nameText = {}   # Indexed by tile UID 
         self.stateTmpSaves = []
         self.polyTmpSaves = []
         
@@ -202,7 +237,7 @@ class Board:
         self.Cols = C
         self.Board = [[' ' for x in range(self.Cols)] for y in range(self.Rows)] #[[' ']*self.Cols]*self.Rows
         #list of polyominoes
-        self.Polyominoes = []
+        self.Polyominoes: list[Polyomino] = []
         self.ConcreteTiles = []
         self.ConcreteColor = "#686868"
         #get the index of a polyomino based on symbol
@@ -273,7 +308,7 @@ class Board:
             if self.coordToTile[t.x][t.y] == None:
                     self.coordToTile[t.x][t.y] = t
                     self.ConcreteTiles.append(t)
-            elif DEBUGGING:
+            elif DEBUGGING: # jesus christ 
                 print("tumbletiles.py - Board.AddConc(): Can not add tile. A tile already exists at this location - Line ", lineno(), "\n", end=' ')
 
         except IndexError:
@@ -536,6 +571,7 @@ class Board:
            # color = ('#%02X%02X%02X' % (r(),r(),r()))
             color = tile.color
             poly = Polyomino(0, tile.x, tile.y, tile.glues, color)
+            poly.Tiles[0].name = tile.name # what an utterly awful fix.
             self.Polyominoes.append(poly)
         self.remapArray()
         self.ActivateGlues()

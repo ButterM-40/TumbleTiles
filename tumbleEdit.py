@@ -19,6 +19,7 @@ import math
 from tkinter.colorchooser import askcolor
 import numpy as np
 from dataclasses import dataclass
+from typing import SupportsInt
 
 # the x and y coordinate that the preview tiles will begin to be drawn on
 
@@ -94,7 +95,7 @@ class TileEditorGUI:
         self.width = self.board_w * self.tile_size
         self.height = self.board_h * self.tile_size
 
-        self.prevTileList = previewTileList
+        self.prevTileList: list[TT.Tile] = previewTileList
 
         self.selectedTileIndex = -1
 
@@ -170,6 +171,8 @@ class TileEditorGUI:
         label="Save Configuration",
          command=lambda: self.saveTileConfig())
 
+        optionsMenu.add_command(label="Strip to Construction", command=lambda: self.clampBoard())
+
         # add the options menu to the menu bar
         self.menuBar.add_cascade(label="Option", menu=optionsMenu)
         self.newWindow.config(menu=self.menuBar)
@@ -231,6 +234,13 @@ Left-Click:
 
 Right-Click:
         - Delete Single Tile
+
+SHIFTING:
+    Arrow Keys - Step entire board in given direction.
+    SHIFT + Arrow Keys - Step entire board 5 steps in given direction.
+
+TILE NAMING:
+    Double-click on an existing tile to give it a custom label.
 
 AREA SELECTION TOOL
 Ctrl + Left-Click:
@@ -313,6 +323,8 @@ Shift + Right-Click:
      lambda event: self.onBoardClick(event))  # -- RIGHT CLICK
         self.BoardCanvas.bind("<Button-2>", lambda event: self.onBoardClick(event))
 
+        self.BoardCanvas.bind("<Double-Button-1>", self.setTileName)
+
         # Location of last square clicked
         self.CURRENTCLICKX = 0
         self.CURRENTCLICKY = 0
@@ -378,8 +390,52 @@ Shift + Right-Click:
         self.redrawPrev()
 
         self.highlighted_cross = (None, None)
+        self.queryTileSetNameWindow = None 
 
     # populates the array of tiles
+
+    def canvasCoordsToTileCoords(self, x: int, y: int) -> tuple[int, int]:
+        return (x // self.tile_size, y // self.tile_size)
+
+    def queryTileSetName(self, tile: TT.Tile):
+        if self.queryTileSetNameWindow: return 
+
+        self.queryTileSetNameWindow = Toplevel(self.newWindow)
+        self.queryTileSetNameWindow.wm_title(f"Set Tile Name of TILE({tile.uid}) at ({tile.x, tile.y})")
+        self.queryTileSetNameWindow.geometry("250x50")
+        self.queryTileSetNameWindow.wm_resizable(False, False)
+        self.queryTileSetNameWindow.protocol("WM_DELETE_WINDOW", lambda: self.queryTileSetNameDestroy())
+
+        self.queryTileSetNameWindowNameVar = StringVar()
+
+        self.queryTileSetNameWindowFrame = Frame(self.queryTileSetNameWindow, width=250, height=25)
+        self.queryTileSetNameWindowLabel = Label(self.queryTileSetNameWindowFrame, text="Set tile name:")
+        self.queryTileSetNameWindowEntry = Entry(self.queryTileSetNameWindowFrame, textvariable=self.queryTileSetNameWindowNameVar, width=10)
+        self.queryTileSetNameWindowSubmitButton = Button(self.queryTileSetNameWindow, text="Apply", command=lambda: self.queryTileSetNameFulfillAndClose(tile))
+
+        self.queryTileSetNameWindowLabel.pack(side=LEFT)
+        self.queryTileSetNameWindowEntry.pack(side=LEFT)
+        self.queryTileSetNameWindowFrame.pack()
+        self.queryTileSetNameWindowSubmitButton.pack()
+
+    def queryTileSetNameDestroy(self):
+        self.queryTileSetNameWindow.destroy()
+        self.queryTileSetNameWindow = None 
+
+    def queryTileSetNameFulfillAndClose(self, tile: TT.Tile):
+        tile.name = self.queryTileSetNameWindowNameVar.get()
+
+        self.queryTileSetNameDestroy()
+
+        self.redrawPrev()
+
+    def setTileName(self, event: Event):
+        tx, ty = self.canvasCoordsToTileCoords(event.x, event.y)
+
+        for p in self.board.Polyominoes:
+            for tile in p.Tiles:
+                if tile.x == tx and tile.y == ty:
+                    self.queryTileSetName(tile) # TODO: Replace with name query 
 
     def populateArray(self):
         self.coord2tile = [[None for x in range(
@@ -941,19 +997,21 @@ Shift + Right-Click:
             # self.tumbleGUI.setTilesFromEditor(self.board, self.glue_data, self.prevTileList, self.board.Cols, self.board.Rows)
             # self.glue_data = {'N':1, 'E':1, 'S':1, 'W':1,  'A': 1, 'B': 1, 'C': 1, 'D': 1, 'X': 1, 'Y': 1, 'Z': 1}
             
+            shift_held = int(event.state & 0x0001)
+            steps_mult = 1 + 5 * int(shift_held)
 
             if event.keysym == "Up":
                 debug_print("Moving up")
-                self.stepAllTiles("N")
+                self.stepAllTiles("N", steps=steps_mult) # TODO: Replace with enum class arguments
             elif event.keysym == "Right":
                 debug_print("Moving Right")
-                self.stepAllTiles("E")
+                self.stepAllTiles("E", steps=steps_mult)
             elif event.keysym == "Down":
                 debug_print("Moving Down")
-                self.stepAllTiles("S")
+                self.stepAllTiles("S", steps=steps_mult)
             elif event.keysym == "Left":
                 debug_print("Moving Left")
-                self.stepAllTiles("W")
+                self.stepAllTiles("W", steps=steps_mult)
         elif SELECTIONMADE:
             if event.keysym == "Up":
                 debug_print("Moving up")
@@ -1484,35 +1542,45 @@ Shift + Right-Click:
         # print("SELECTION Y1 : ", self.SELECTIONY1)
         # print("SELECTION Y2 : ", self.SELECTIONY2)
 
+        self.deleteSelection()
+
         selectionWidth = self.SELECTIONX2 - self.SELECTIONX1 + 1
         selectionHeight = self.SELECTIONY2 - self.SELECTIONY1  + 1
         for x in range(0, selectionWidth):
+            newX = self.CURRENTSELECTIONX + (selectionWidth - x) - 1
+            if newX > self.board.Rows: break  
+
             for y in range(0, selectionHeight):
+                newY = self.CURRENTSELECTIONY + y
+                if newY > self.board.Cols: break 
+
                 # print "Removing tile at ", x + self.CURRENTSELECTIONX, ", ", y + self.CURRENTSELECTIONY
-                self.removeTileAtPos(self.CURRENTSELECTIONX + x,self.CURRENTSELECTIONY + y, False)
+                # self.removeTileAtPos(self.CURRENTSELECTIONX + x,self.CURRENTSELECTIONY + y, False)
+                self.addTileAtPos(newX, newY, False)
                         
 
         # print("fill in")
 
-        selectionWidth = self.SELECTIONX2 - self.SELECTIONX1 + 1
-        selectionHeight = self.SELECTIONY2 - self.SELECTIONY1  + 1
+        # selectionWidth = self.SELECTIONX2 - self.SELECTIONX1 + 1
+        # selectionHeight = self.SELECTIONY2 - self.SELECTIONY1  + 1
 
         # print "Width: ", selectionWidth
         # print "Height: ", selectionHeight
 
-        for x in range(0, selectionWidth):
-            for y in range(0, selectionHeight):
-                newX = self.CURRENTSELECTIONX + (selectionWidth - x) - 1
-                # print "NEWX: ", newX
-                newY = self.CURRENTSELECTIONY + y
-                # print "NEWY: ", newY
+        # for x in range(0, selectionWidth):
+        #     for y in range(0, selectionHeight):
+        #         newX = self.CURRENTSELECTIONX + (selectionWidth - x) - 1
+        #         # print "NEWX: ", newX
+        #         newY = self.CURRENTSELECTIONY + y
+        #         # print "NEWY: ", newY
 
-                if newX > self.board.Rows or newY > self.board.Cols:
-                        continue
+        #         if newX > self.board.Rows or newY > self.board.Cols:
+        #                 continue
                 
-                self.addTileAtPos(newX, newY)
+        #         self.addTileAtPos(newX, newY)
                         
 
+        self.verifyTileLocations()
         self.redrawPrev()
         self.board.remapArray()
                 
@@ -1575,7 +1643,7 @@ Shift + Right-Click:
                     newY = self.CURRENTSELECTIONY + y
                     # print "NEWY: ", newY
 
-                    if newX > self.board.Rows or newY > self.board.Cols:
+                    if newX > self.board.Cols or newY > self.board.Rows:
                         continue
 
                     p = TT.Polyomino(0, newX, newY, tile.glues, tile.color)
@@ -1583,7 +1651,8 @@ Shift + Right-Click:
                     eastGlue = self.newTileE.get()
                     southGlue = self.newTileS.get()
                     westGlue = self.newTileW.get()
-                    
+                    p.Tiles[0].name = tile.name
+
 
                     glues = [northGlue, eastGlue, southGlue, westGlue]
                     color = "#686868"
@@ -1668,7 +1737,7 @@ Shift + Right-Click:
 
         
 
-    def addTileAtPos(self, f_x: float, f_y: float):
+    def addTileAtPos(self, f_x: float, f_y: float, refresh: bool=True):
         x = int(f_x)
         y = int(f_y)
         
@@ -1679,8 +1748,8 @@ Shift + Right-Click:
 
 
         # random color function: https://stackoverflow.com/questions/13998901/generating-a-random-hex-color-in-python
-        r = lambda: random.randint(100,255)
         if self.randomizeColor:
+            r = lambda: random.randint(100,255)
             color = ('#%02X%02X%02X' % (r(),r(),r()))
         else:
             color = self.prevTileList[i].color
@@ -1696,9 +1765,9 @@ Shift + Right-Click:
             self.board.coordToTile[x][y]= newConcTile
 
 
-
-        # self.verifyTileLocations()
-        self.redrawPrev()
+        if refresh:
+            self.verifyTileLocations()
+            self.redrawPrev()
 
 
     
@@ -1724,7 +1793,7 @@ Shift + Right-Click:
 
 
 
-    def stepAllTiles(self, direction):
+    def stepAllTiles(self, direction, update=True, steps=1):
         debug_print("STEPPING", direction) 
         dx = 0
         dy = 0
@@ -1734,26 +1803,28 @@ Shift + Right-Click:
         crosses_edge_west  = False 
         crosses_edge_east  = False 
 
-        for y in range(self.board.Cols):
-            if self.board.coordToTile[0][y] is not None: crosses_edge_west = True 
-            if self.board.coordToTile[-1][y] is not None: crosses_edge_east = True 
+        for y in range(self.board.Rows): # TODO: Scale dynamically to value of steps parameter  
+            for x in range(steps):
+                if self.board.coordToTile[steps-1][y] is not None: crosses_edge_west = True 
+                if self.board.coordToTile[-1 - steps][y] is not None: crosses_edge_east = True 
 
-        for x in range(self.board.Rows):
-            if self.board.coordToTile[x][0] is not None: crosses_edge_north = True 
-            if self.board.coordToTile[x][-1] is not None: crosses_edge_south = True 
+        for x in range(self.board.Cols): # TODO: Scale dynamically to value of steps parameter 
+            for y in range(steps):
+                if self.board.coordToTile[x][steps-1] is not None: crosses_edge_north = True 
+                if self.board.coordToTile[x][-1 - steps] is not None: crosses_edge_south = True 
 
         if direction == "N":
             if crosses_edge_north: return 
-            dy = -1
+            dy = -1 * steps 
         elif direction == "S":
             if crosses_edge_south: return 
-            dy = 1
+            dy = 1 * steps 
         elif direction == "E":
             if crosses_edge_east: return 
-            dx = 1
+            dx = 1 * steps 
         elif direction == "W":
             if crosses_edge_west: return 
-            dx = -1
+            dx = -1 * steps 
 
         for p in self.board.Polyominoes:
             for tile in p.Tiles:
@@ -1770,7 +1841,7 @@ Shift + Right-Click:
             if tile.y + dy >= 0 and tile.y + dy < self.board.Rows:          
                 tile.y = tile.y + dy
 
-        self.redrawPrev()
+        if update: self.redrawPrev()
         self.board.remapArray()
 
 
@@ -1851,8 +1922,9 @@ Shift + Right-Click:
     # ***********************************************************************************************
 
 
-
+    # this is NOT file IO bro 
     def newBoard(self):
+        """Creates a new board and deletes the old board from memory."""
         del self.board.Polyominoes[:]
         self.board.LookUp = {}
 
@@ -1863,11 +1935,13 @@ Shift + Right-Click:
         self.redrawPrev()
 
     def exportTiles(self):
+        """I have no idea what this does beyond the name of the function."""
         # print("new cols : ", self.board.Cols, "new rows : ", self.board.Rows)
 
         self.tumbleGUI.setTilesFromEditor(self.board, self.glue_data, self.prevTileList, self.board.Cols, self.board.Rows)
 
     def saveTileConfig(self):
+        """Save the tile config to an XML."""
         filename = tkinter.filedialog.asksaveasfilename(defaultextension=".xml", filetypes=[("eXtensible Markup Language", ".xml")])
         if not filename: 
             return
@@ -1907,7 +1981,7 @@ Shift + Right-Click:
                 
 
                 wg = ET.SubElement(prevTile, "WestGlue")
-                
+
 
                 if len(td.glues) > 0:
                     ng.text = str(td.glues[0])
@@ -1955,7 +2029,12 @@ Shift + Right-Click:
                 co = ET.SubElement(t, "Concrete")
                 co.text = str(tile.isConcrete)
 
+                uid = ET.SubElement(t, "uid")
+                uid.text = str(tile.uid)
 
+                name = ET.SubElement(t, "name")
+                name.text = tile.name 
+                print(name.text)
 
                 la = ET.SubElement(t, "Label")
                 la.text = str(tile.id)
@@ -2022,16 +2101,52 @@ Shift + Right-Click:
         self.newWindow.master.title(f"{filename.split('/')[-1]}")
         self.newWindow.title(f"Editor - {self.parent.title()}")
 
-
-
-
     def closeGUI(self):
+        """Closes the tile editor GUI."""
         self.newWindow.destroy()
         self.newWindow.destroy()
 
     def closeNewTileWindow(self):
+        """Closes the tile type configuration window."""
         self.addTileWindow.destroy()
         self.addTileWindow = None 
+
+    def clampBoard(self):
+        """Clamps the board to the bounding box of the simulation."""
+
+        min_x, min_y, max_x, max_y = self.getBoundingBox()
+        print(self.getBoundingBox())
+
+        self.stepAllTiles("W", False, min_x)
+        self.stepAllTiles("N", False, min_y)
+
+        clamp_x = max_x - min_x + 1
+        clamp_y = max_y - min_y + 1
+
+        self.resizeBoard(clamp_x, clamp_y)
+
+    def getBoundingBox(self) -> tuple[int, int, int, int]: # Should we use a dataclass instead?
+        """
+        Gets the bounding box `(x0, y0, x1, y1)` of the board.
+
+        Returns:
+            `tuple[int,int,int,int]`:The bounding box. Might replace with dataclass. 
+        """
+        
+        min_x = self.board_w 
+        max_x = 0
+        min_y = self.board_h
+        max_y = 0 
+
+        for y in range(self.board.Rows):
+            for x in range(self.board.Cols):
+                if self.board.coordToTile[x][y] is not None:
+                    min_x = min(min_x, x) 
+                    max_x = max(max_x, x)
+                    min_y = min(min_y, y)
+                    max_y = max(max_y, y)
+
+        return (min_x, min_y, max_x, max_y)
 
 
     class WindowResizeDialogue:
@@ -2060,12 +2175,14 @@ Shift + Right-Click:
             self.pressed_apply = False
 
             Label(self.w, text="Width:").pack()
-            self.bw_sbx=Spinbox(self.w, from_=10, to=1000,width=5, increment=5, textvariable = self.bw)
+            # self.bw_sbx=Spinbox(self.w, from_=10, to=1000,width=5, increment=5, textvariable = self.bw)
+            self.bw_sbx = Entry(self.w, textvariable=self.bw, width=5)
             # self.e1.insert(0, str(board_w))
             self.bw_sbx.pack()
 
             Label(self.w, text="Height:").pack()
-            self.bh_sbx = Spinbox(self.w, from_=10, to=1000,width=5, increment=5, textvariable = self.bh)
+            # self.bh_sbx = Spinbox(self.w, from_=10, to=1000,width=5, increment=5, textvariable = self.bh)
+            self.bh_sbx = Entry(self.w, width=5, textvariable=self.bh)
             # self.e2.insert(0, str(board_h))
             self.bh_sbx.pack()
 

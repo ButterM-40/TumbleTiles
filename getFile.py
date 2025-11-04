@@ -91,7 +91,7 @@ def parseFile(filename):
             newPrevTile["eastGlue"] = " "
             newPrevTile["label"] = "X"
             newPrevTile["concrete"] = " "
-
+            newPrevTile["name"] = ""
     
 
             if prev.find('Color') != None:
@@ -136,6 +136,7 @@ def parseFile(filename):
             newTile["eastGlue"] = " "
             newTile["label"] = "X"
             newTile["concrete"] = " "
+            newTile["name"] = ""
 
             if tile.find('Location') != None:
                 newTile["location"]["x"] = int(tile.find('Location').attrib['x'])
@@ -161,11 +162,13 @@ def parseFile(filename):
                 newTile["westGlue"] = tile.find('WestGlue').text
 
             if tile.find('label') != None:
-                newTile["label"] = tile.find('label').text
+                newTile["label"] = tile.find('label').text # unfinished label feature? 
 
             if tile.find('Concrete') != None:
                 newTile["concrete"] = tile.find('Concrete').text
         
+            if tile.find("name") != None:
+                newTile["name"] = tile.find("name").text 
 
             tile_set_data["tileData"].append(newTile)
 
@@ -177,10 +180,14 @@ def parseFile(filename):
     for tile in tile_set_data["tileData"]:
         if tile["concrete"] != "True":
             glues = [tile["northGlue"],tile["eastGlue"],tile["southGlue"],tile["westGlue"]]
-            board.Add(TT.Polyomino(0, tile["location"]["x"], tile["location"]["y"], glues, tile["color"]))
+            poly = TT.Polyomino(0, tile["location"]["x"], tile["location"]["y"], glues, tile["color"])
+            poly.Tiles[0].name = tile["name"]
+            board.Add(poly)
         else:
             glues = []
-            board.AddConc(TT.Tile(None, 0, tile["location"]["x"], tile["location"]["y"], glues, tile["color"], "True"))
+            concrete_tile = TT.Tile(None, 0, tile["location"]["x"], tile["location"]["y"], glues, tile["color"], "True")
+            concrete_tile.name = tile["name"]
+            board.AddConc(concrete_tile)
 
     for prevTile in prevTiles:
         prevGlues = [prevTile["northGlue"],prevTile["eastGlue"],prevTile["southGlue"],prevTile["westGlue"]]

@@ -23,6 +23,12 @@ $ python3 -m pip -r requirements.txt
 $ python3 main.py
 ```
 
+If the above results in an error relating to containerizing your packages, try running `./deb-setup.sh` and running python with `./py`:
+```sh
+$ ./deb-setup.sh
+$ ./py main.py
+```
+
 ### 1.3 Windows
 Tkinkter should be installed with your installation of Python. If it is not found, open an issue. 
 ```sh

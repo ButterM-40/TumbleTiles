@@ -2,11 +2,11 @@
 # Tim Wylie
 # 2018
 
-
 from __future__ import absolute_import
 from __future__ import print_function
 import copy
 import threading
+from queue import Queue
 
 from tkinter import *
 from tkinter import messagebox
@@ -22,14 +22,26 @@ import tumbleEdit as TE
 
 import tt2svg as TT2SVG
 
+import argparse
+
 from getFile import getFile, parseFile, FileType
 from boardgui import redrawCanvas, drawGrid, redrawTumbleTiles, deleteTumbleTiles, drawPILImage
 import os
 import sys
 
+import sv_ttk
+if os.name == 'nt':
+    import pywinstyles
+
 
 from PIL import Image, ImageDraw
 # https://pypi.python.org/pypi/pyscreenshot
+
+from PIL import GifImagePlugin
+GifImagePlugin.LOADING_STRATEGY = GifImagePlugin.LoadingStrategy.RGB_AFTER_DIFFERENT_PALETTE_ONLY
+
+# TODO: ULTRA MEGA IMPORTANT TODO: SERIOUSLY TODO: FIX HARDCODED GUI. FOR THE LOVE OF THE FATHER, THE SON, AND THE HOLY SPIRIT, FIX IT.
+# TODO: Video Export scaling (^ or just do this) and also display output resolution and projected time/memusage 
 
 try:
     PYSCREEN = False
@@ -59,7 +71,7 @@ NEWTILEWINDOW_H = 180
 LOGFILE = None
 LOGFILENAME = ""
 #TODO: Change back to 25
-TILESIZE = 12
+TILESIZE = 10
 VERSION = "2.0"
 LASTLOADEDFILE = ""
 LASTLOADEDSCRIPT = ""
@@ -82,6 +94,18 @@ MODS = {
     0x0400: 'Mouse button 3'
 }
 
+COUNTER = 0
+
+simulation_batch_MoveDirection: Queue[tuple] = Queue()
+
+def OnScriptStepInvocation(e: Event):
+    global simulation_batch_MoveDirection
+
+    if simulation_batch_MoveDirection.empty(): return
+
+    item = simulation_batch_MoveDirection.get()
+    item[0].MoveDirection(item[1]) # lmao
+    simulation_batch_MoveDirection.task_done()
 
 class ScriptExecutorThread(threading.Thread):
     def __init__(self, threadID, name, counter, tg, onstop=lambda: ...):
@@ -97,19 +121,26 @@ class ScriptExecutorThread(threading.Thread):
         self.f = f
 
     def run_once_(self):
+        global simulation_batch_MoveDirection
+
         for c in self.f:
             if self.counter == 0:
                 break
 
             time.sleep(self.counter / 1000)
             
-            self.tg.MoveDirection(c)
+            simulation_batch_MoveDirection.put((self.tg, c))
+            self.tg.root.event_generate("<<OnScriptStepInvocation>>")
+
             
 
     def run(self):
+
         if self.tg.tkLoopScript.get():
-            while self.tg.tkLoopScript.get() and self.counter != 0:
+            # still have no idea what the point of the counter check is 
+            while self.tg.tkLoopScript.get() and self.counter != 0: 
                 self.run_once_()
+                
         else:
             self.run_once_()
 
@@ -302,16 +333,21 @@ class Settings:
             padx=5,
             pady=5,
             sticky=W)
-        self.boardwidth_sbx = Spinbox(
+        # self.boardwidth_sbx = Spinbox(
+        #     self.t,
+        #     from_=10,
+        #     to=5000,
+        #     width=5,
+        #     textvariable=self.tkBOARDWIDTH).grid(
+        #     row=1,
+        #     column=1,
+        #     padx=5,
+        #     pady=5)
+        self.boardheight_sbx = Entry(
             self.t,
-            from_=10,
-            to=500,
-            width=5,
-            textvariable=self.tkBOARDWIDTH).grid(
-            row=1,
-            column=1,
-            padx=5,
-            pady=5)
+            textvariable=self.tkBOARDWIDTH,
+            width=5 
+        ).grid(row=1, column=1, padx=5, pady=5)
         # board height
         self.l3 = Label(
             self.t,
@@ -321,16 +357,21 @@ class Settings:
             padx=5,
             pady=5,
             sticky=W)
-        self.boardheight_sbx = Spinbox(
+        # self.boardheight_sbx = Spinbox(
+        #     self.t,
+        #     from_=10,
+        #     to=5000,
+        #     width=5,
+        #     textvariable=self.tkBOARDHEIGHT).grid(
+        #     row=2,
+        #     column=1,
+        #     padx=5,
+        #     pady=5)
+        self.boardheight_sbx = Entry(
             self.t,
-            from_=10,
-            to=500,
-            width=5,
-            textvariable=self.tkBOARDHEIGHT).grid(
-            row=2,
-            column=1,
-            padx=5,
-            pady=5)
+            textvariable=self.tkBOARDHEIGHT,
+            width=5 
+        ).grid(row=2, column=1, padx=5, pady=5)
         # temperature
         self.l4 = Label(
             self.t,
@@ -406,202 +447,6 @@ class Settings:
             LOGFILE.write(stlog)
             LOGFILE.close()
 
-class VideoExport:
-    def __init__(self, parent, tumblegui):  # , fun):
-        # TODO: Fix-dynamicize padding. It's atrocious. 
-        global TILESIZE
-
-        self.tumbleGUI = tumblegui
-        #self.function = fun
-        self.parent = parent
-
-        self.parent = parent
-        self.t = Toplevel(self.parent)
-        self.t.resizable(False, False)
-        #self.wm_attributes("-disabled", True)
-        self.t.wm_title("Video Export")
-        # self.toplevel_dialog.transient(self)
-        self.t.geometry('360x280') 
-
-
-        self.tileRes=StringVar()                # Variable for Tile Resolution
-        self.fileName= StringVar()              # Variable for the script file name
-        self.videoSpeed = StringVar()           # Variale for the frame rate
-        self.lineWidth = StringVar()            # Variable for the width of tile border
-        self.exportFileNameText = StringVar()   # Variabe for name of the output file
-        self.exportText = StringVar()           # Variable for the text that logs the video output
-
-
-        # Set default amounts
-
-        self.tileRes.set("100")
-        self.videoSpeed.set("3")
-        self.lineWidth.set("10")
-
-
-        # Initiate all Label objects
-
-        self.tileResLabel = Label(self.t, text="Tile Resolution: ")
-        self.fileNameLabel = Label(self.t, text="Script File Name: ")
-        self.videoSpeedLabel = Label(self.t, text="Frames/Sec: ")
-        self.lineWidthLabel = Label(self.t, text="Line Width: ")
-        self.exportLabel = Label(self.t, text="", textvariable=self.exportText)
-        self.exportFileNameLabel = Label(self.t, text="Output File Name:")
-        
-        # Initiate all text field objects
-
-        self.tileResField = Entry(self.t, textvariable=self.tileRes, width=5)
-        self.fileNameField = Entry(self.t, textvariable=self.fileName)
-        self.videoSpeedField = Entry(self.t, textvariable=self.videoSpeed, width=5)
-        self.lineWidthField = Entry(self.t, textvariable=self.lineWidth, width=5)
-        # self.exportFileNameField = Entry(self.t, textvariable=self.exportFileNameText, width=5)
-        
-        
-
-        # Horizontal starting points for the labels and the fields
-
-        labelStartX=60
-        fieldStartX=180
-
-        # Place all the components using x and y coordinates
-
-        self.tileResLabel.place(x=labelStartX, y=20)
-        self.tileResField.place(x=fieldStartX, y=20)
-
-        self.lineWidthLabel.place(x=labelStartX, y=40)
-        self.lineWidthField.place(x=fieldStartX,y=40)
-
-        self.fileNameLabel.place(x=labelStartX, y=80)
-        self.fileNameField.place(x=fieldStartX,y=80, width=130)
-
-        self.exportFileNameLabel.place(x=labelStartX, y=130)
-        self.exportFileNameLabel.config(wraplength=360-labelStartX)
-        # self.exportFileNameField.place(x=fieldStartX,y=130, width=130)
-
-        self.videoSpeedLabel.place(x=labelStartX, y=60)
-        self.videoSpeedField.place(x=fieldStartX, y=60)
-
-        browseButton = Button(self.t, text="Browse", command=self.openFileWindow)
-        browseButton.place(x=fieldStartX, y=100, height=20)
-
-
-        self.exportLabel.place(x=labelStartX, y=175)
-        # Create a progres bar to show status of video export
-
-        self.progress_var = DoubleVar() 
-        self.progress=tkinter.ttk.Progressbar(self.t,orient=HORIZONTAL,variable=self.progress_var,length=260,mode='determinate')
-        self.progress.place(x=50, y=195)
-        
-        # Place export button    
-
-        exportButton = Button(self.t, text="Export", command=self.export)
-        exportButton.place(x=150, y=230)
-
-
-        
-    def openFileWindow(self):
-        fileName = getFile(FileType.TXT)
-
-        self.fileName.set(fileName)
-        # self.fileNameField.delete(0,END)
-        # self.fileNameField.insert(0, fileName)
-        
-
-    def export(self):   
-
-        #Create a copy of the board to reset to once the recording is done
-        boardCopy = copy.deepcopy(self.tumbleGUI.board)
-
-        # Convert the tile resolution to an INT
-
-        self.tileResInt = int(self.tileRes.get())
-
-        self.createGif()
-
-        # Delete the current board and restore the old board
-        del(self.tumbleGUI.board)
-        self.tumbleGUI.board = boardCopy
-       
-
-
-    # This function will load a script (sequence of directions to tumble) and
-    # step through it, it will save a temp image in ./Gifs/ and compile these
-    # into a gif
-    def createGif(self):
-
-
-        self.progress_var.set(0)        # Set progress bar to 0
-        self.exportText.set("")         # Set the export text to blank
-
-        filename = self.fileName.get()  # Get the filename from the text field
-        file = open(filename, "r")
-
-
-        # Calculate duration of each frame from the Framerate text field
-
-        framesPerSec = 1000 / int(self.videoSpeed.get())
-
-        lineWidthInt = int(self.lineWidth.get())
-
-        images = [] 
-
-        sequence = file.readlines()[0].rstrip('\n') # Read in the script file
-
-        seqLen = len(sequence)  # total length used for progress bar
-
-
-        # # If Videos folder does not exist, create it
-        # if not os.path.exists("Videos"):
-        #     os.makedirs("Videos")
-
-        exportFile = tkinter.filedialog.asksaveasfilename(confirmoverwrite=True, defaultextension=".gif", filetypes=[("Graphics Interchange Format", ".gif")])
-        self.exportFileNameLabel.config(text=f"Output File Name: {exportFile}")
-
-        # if self.exportFileNameText.get() == "": # If no file name was given create one
-        
-        #     x = 0
-        #     y = 0
-        #     z = 0
-        #     while os.path.exists("Videos/%s%s%s.gif" % (x, y, z)):
-        #         z = z + 1
-        #         if z == 10:
-        #             z = 0
-        #             y = y + 1
-        #         if y == 10:
-        #             y = 0
-        #             x = x + 1
-
-        #     exportFile = ("Videos/%s%s%s.gif" % (x, y, z))
-        # else:
-        #     exportFile = "Videos/" + self.exportFileNameText.get() + ".gif"
-
-        for x in range(0, len(sequence)):   
-
-
-            self.progress_var.set(float(x)/seqLen * 100)    # Update progress bar
-            self.t.update()                                 # update toplevel window
-           
-            
-            self.tumbleGUI.MoveDirection(sequence[x], redraw= False) # Move the board in the specified direction
-            
-
-            # Call function to get and image in memory of the current state of the board, passing it the tile resolution and the line width to use
-            image = self.tumbleGUI.getImageOfBoard(self.tileResInt, lineWidthInt)
-
-            # Append the returned image to the image array
-            images.append(image)
-        
-        # Save the image
-
-        images[0].save(exportFile, save_all=True, append_images=images[1:], duration=framesPerSec, loop=1)
-
-        # Set the export Text
-        self.exportText.set("Video saved at "+exportFile)
-
-        # Update the progress bar and update the toplevel to redraw the progress bar
-
-        self.progress_var.set(100)
-        self.t.update()
 
         
 
@@ -626,7 +471,7 @@ class tumblegui:
         self.prevTileList = []
 
         self.board = TT.Board(TT.BOARDHEIGHT, TT.BOARDWIDTH)
-        self.root = root
+        self.root: Tk = root
         self.root.resizable(True, True)
         self.mainframe = Frame(self.root, bd=0, relief=FLAT)
 
@@ -1016,6 +861,8 @@ class tumblegui:
         self.thread1.counter = SCRIPTSPEED
         self.thread1.setScript(script)
         self.thread1.start()
+        self.root.bind("<<OnScriptStepInvocation>>", OnScriptStepInvocation)
+
         # self.runSequence(script)
 
     # Steps through string in script and tumbles in that direction
@@ -1025,13 +872,13 @@ class tumblegui:
         global SCRIPTSPEED
 
         for x in range(0, len(sequence)):
-            time.sleep(SCRIPTSPEED / 1000)
+            # time.sleep(0.0001) TODO uncomment
             
             self.MoveDirection(sequence[x])
             
             # print sequence[x], " - ",
 
-            self.w.update_idletasks()
+        self.w.update_idletasks()
 
     def changetile(self):
         global TILESIZE
@@ -1366,7 +1213,7 @@ class tumblegui:
                     copy.deepcopy(self.board.Polyominoes))
                 self.CurrentState = self.maxStates - 1
             else:
-                print("Removing some states 1")
+                # print("Removing some states 1")
                 self.ApplyUndo()
 
                 self.stateTmpSaves.append(
@@ -1380,7 +1227,7 @@ class tumblegui:
                 self.CurrentState = self.CurrentState + 1
 
             else:
-                print("Removing some states 2")
+                # print("Removing some states 2")
                 self.ApplyUndo()
 
                 self.stateTmpSaves.append(
@@ -1390,7 +1237,7 @@ class tumblegui:
     def ApplyUndo(self):
         global RECORDING
         global SCRIPTSEQUENCE
-        print("Applying Undo")
+        # print("Applying Undo")
         for x in range(0, len(self.stateTmpSaves) - self.CurrentState - 1):
             print("x :", x)
             self.stateTmpSaves.pop()
@@ -1435,15 +1282,15 @@ class tumblegui:
         # normal
         if direction != "" and self.tkSTEPVAR.get(
         ) == False and self.tkGLUESTEP.get() == False:
+            
 
             self.board.Tumble(direction)
-            self.Log("T" + direction + ", ")
+            # self.Log("T" + direction + ", ")
 
         # normal with glues
         elif direction != "" and self.tkSTEPVAR.get() == False and self.tkGLUESTEP.get() == True:
-
             self.board.TumbleGlue(direction)
-            self.Log("TG" + direction + ", ")
+            # self.Log("TG" + direction + ", ")
 
         # single step
         elif direction != "" and self.tkSTEPVAR.get():
@@ -1452,18 +1299,22 @@ class tumblegui:
             s = self.board.Step(direction)
             if self.tkGLUESTEP.get():
                 self.board.ActivateGlues()
-                self.Log("SG" + direction + ", ")
+                # self.Log("SG" + direction + ", ")
             else:
-                self.Log("S" + direction + ", ")
+                ...
+                # self.Log("S" + direction + ", ")
             if s == False and self.tkGLUESTEP.get() == False:
                 self.board.ActivateGlues()
-                self.Log("G, ")
+                # self.Log("G, ")
+        
+        
         self.SaveStates()
         if RECORDING:
             SCRIPTSEQUENCE = SCRIPTSEQUENCE + direction
 
-        if redraw:    
+        if redraw: # TODO: Redraw is heavily bottlenecked when script executor is active
             self.callCanvasRedrawTumbleTiles()
+
 
     # except Exception as e:
      #   print e
@@ -1623,7 +1474,7 @@ class tumblegui:
             self.prevTileList)
 
     # Turns the list of polyominoes and concrete tiles into a list of tiles including their position
-    # this is used to get the tile list that will be paseed to the editor
+    # this is used to get the tile list that will be passed to the editor
     def getTileDataFromBoard(self):
         new_tile_data = []
 
@@ -1641,6 +1492,7 @@ class tumblegui:
                 ntile["westGlue"] = t.glues[3]
                 ntile["color"] = t.color
                 ntile["concrete"] = "False"
+                ntile["name"] = t.name
 
                 new_tile_data.append(ntile)
 
@@ -1664,7 +1516,7 @@ class tumblegui:
 
     # This method will be called wben you want to export the tiles from the
     # editor back to the simulation
-    def setTilesFromEditor(self, board, glueFunc, prev_tiles, width, height):
+    def setTilesFromEditor(self, board: TT.Board, glueFunc, prev_tiles, width, height):
         TT.BOARDHEIGHT = board.Rows
         TT.BOARDWIDTH = board.Cols
         self.board = board
@@ -1678,6 +1530,7 @@ class tumblegui:
         self.SaveStates()
         self.callCanvasRedraw()
 
+        
     def parseFile2(self, filename):
         tree = ET.parse(filename)
         treeroot = tree.getroot()
@@ -2087,8 +1940,275 @@ class tumblegui:
                                        ")", fill=self.gridcolor, font=('', TILESIZE /
                                                                        5))
 
+"""
+import tkinter as tk
+
+def toggle_state():
+    # This function is called when the Checkbutton is clicked
+    if var.get():
+        label.config(text="Toggle is ON")
+    else:
+        label.config(text="Toggle is OFF")
+
+root = tk.Tk()
+root.title("Binary Toggle with Checkbutton")
+
+var = tk.BooleanVar() # Variable to hold the state (True/False)
+var.set(True) # Initial state is ON
+
+checkbutton = tk.Checkbutton(root, text="Toggle Option", variable=var, command=toggle_state)
+checkbutton.pack(pady=10)
+
+label = tk.Label(root, text="Toggle is ON")
+label.pack()
+
+root.mainloop()
+"""
+
+class VideoExport:
+    def __init__(self, parent, tumble_gui: tumblegui):  # , fun):
+        # TODO: Fix-dynamicize padding. It's atrocious. 
+        global TILESIZE
+
+        self.tumbleGUI: tumblegui = tumble_gui
+        #self.function = fun
+        self.parent = parent
+
+        self.parent = parent
+        self.t = Toplevel(self.parent)
+        self.t.resizable(False, False)
+        #self.wm_attributes("-disabled", True)
+        self.t.wm_title("Video Export")
+        # self.toplevel_dialog.transient(self)
+        self.t.geometry('360x280') 
+
+
+        self.tileRes=StringVar()                # Variable for Tile Resolution
+        self.fileName= StringVar()              # Variable for the script file name
+        self.videoSpeed = StringVar()           # Variale for the frame rate
+        self.lineWidth = StringVar()            # Variable for the width of tile border
+        self.exportFileNameText = StringVar()   # Variabe for name of the output file
+        self.exportText = StringVar()           # Variable for the text that logs the video output
+        self.hasThickOutline = BooleanVar()
+
+        # Set default amounts
+
+        self.tileRes.set("1")
+        self.videoSpeed.set("4")
+        self.lineWidth.set("1")
+        self.hasThickOutline.set(True)
+
+        # Initiate all Label objects
+
+        self.tileResLabel = Label(self.t, text="Output Scale: ")
+        self.fileNameLabel = Label(self.t, text="Script File Name: ")
+        self.videoSpeedLabel = Label(self.t, text="Frames/Sec: ")
+        self.lineThicknessLabel = Label(self.t, text="Lines (Thick): ")
+        self.exportLabel = Label(self.t, text="", textvariable=self.exportText)
+        self.exportFileNameLabel = Label(self.t, text="Output File Name:")
+        
+        # Initiate all text field objects
+
+        # self.tileResField = Entry(self.t, textvariable=self.tileRes, width=5)
+        self.tileResField = Spinbox(self.t, from_=1, to=10,  textvariable=self.tileRes)
+        self.fileNameField = Entry(self.t, textvariable=self.fileName)
+        self.videoSpeedField = Entry(self.t, textvariable=self.videoSpeed, width=5)
+        #self.lineWidthField = Entry(self.t, textvariable=self.lineWidth, width=5)
+        self.outlineField = Checkbutton(self.t, variable=self.hasThickOutline, command=self.toggleLineThicknessLabel)
+        # self.exportFileNameField = Entry(self.t, textvariable=self.exportFileNameText, width=5)
+        
+        
+
+        # Horizontal starting points for the labels and the fields
+
+        labelStartX=60
+        fieldStartX=180
+
+        # Place all the components using x and y coordinates
+
+        self.tileResLabel.place(x=labelStartX, y=20)
+        self.tileResField.place(x=fieldStartX, y=20)
+
+        self.lineThicknessLabel.place(x=labelStartX, y=40)
+        self.outlineField.place(x=fieldStartX,y=40)
+
+        self.fileNameLabel.place(x=labelStartX, y=85)
+        self.fileNameField.place(x=fieldStartX,y=85, width=130)
+
+        self.exportFileNameLabel.place(x=labelStartX, y=130)
+        self.exportFileNameLabel.config(wraplength=360-labelStartX)
+        # self.exportFileNameField.place(x=fieldStartX,y=130, width=130)
+
+        self.videoSpeedLabel.place(x=labelStartX, y=65)
+        self.videoSpeedField.place(x=fieldStartX, y=65)
+
+        browseButton = Button(self.t, text="Browse", command=self.openFileWindow)
+        browseButton.place(x=fieldStartX, y=105, height=20)
+
+
+        self.exportLabel.place(x=labelStartX, y=180)
+        # Create a progres bar to show status of video export
+
+        self.progress_var = DoubleVar() 
+        self.progress=tkinter.ttk.Progressbar(self.t,orient=HORIZONTAL,variable=self.progress_var,length=260,mode='determinate')
+        self.progress.place(x=50, y=200)
+        
+        # Place export button    
+
+        exportButton = Button(self.t, text="Export", command=self.export)
+        exportButton.place(x=150, y=235)
+
+    def toggleLineThicknessLabel(self):
+        if self.hasThickOutline.get():
+            self.lineThicknessLabel.config(text="Lines (Thick)")
+        else:
+            self.lineThicknessLabel.config(text="Lines (Thin)")
+        
+    def openFileWindow(self):
+        fileName = getFile(FileType.TXT)
+        self.fileName.set(fileName)
+
+        self.t.focus_set()
+        # self.fileNameField.delete(0,END)
+        # self.fileNameField.insert(0, fileName)
+        
+
+    def export(self):   
+
+        #Create a copy of the board to reset to once the recording is done
+        boardCopy = copy.deepcopy(self.tumbleGUI.board)
+
+        # Convert the tile resolution to an INT
+
+        self.tileResInt = 10 * int(self.tileRes.get())
+        self.lineWidthInt = self.tileResInt // 10
+        if self.hasThickOutline.get() == False:
+            self.lineWidthInt = 0
+
+        self.createGif()
+
+        # Delete the current board and restore the old board
+        del(self.tumbleGUI.board)
+        self.tumbleGUI.board = boardCopy
+       
+
+
+    # This function will load a script (sequence of directions to tumble) and
+    # step through it, it will save a temp image in ./Gifs/ and compile these
+    # into a gif
+    def createGif(self):
+
+
+        self.progress_var.set(0)        # Set progress bar to 0
+        self.exportText.set("")         # Set the export text to blank
+
+        filename = self.fileName.get()  # Get the filename from the text field
+        file = open(filename, "r")
+
+
+        # Calculate duration of each frame from the Framerate text field
+
+        framesPerSec = 1000 / int(self.videoSpeed.get())
+
+        images: list[Image.Image] = [] 
+
+        sequence = file.readlines()[0].rstrip('\n') # Read in the script file
+
+        seqLen = len(sequence)  # total length used for progress bar
+
+
+        # # If Videos folder does not exist, create it
+        # if not os.path.exists("Videos"):
+        #     os.makedirs("Videos")
+
+        exportFile = tkinter.filedialog.asksaveasfilename(confirmoverwrite=True, defaultextension=".gif", filetypes=[("Graphics Interchange Format", ".gif")])
+        self.exportFileNameLabel.config(text=f"Output File Name: {exportFile}")
+        self.t.focus_set()
+
+        # if self.exportFileNameText.get() == "": # If no file name was given create one
+        
+        #     x = 0
+        #     y = 0
+        #     z = 0
+        #     while os.path.exists("Videos/%s%s%s.gif" % (x, y, z)):
+        #         z = z + 1
+        #         if z == 10:
+        #             z = 0
+        #             y = y + 1
+        #         if y == 10:
+        #             y = 0
+        #             x = x + 1
+
+        #     exportFile = ("Videos/%s%s%s.gif" % (x, y, z))
+        # else:
+        #     exportFile = "Videos/" + self.exportFileNameText.get() + ".gif"
+
+        # TODO: Replace with stream instead of caching all images before encoding stage 
+        for x in range(0, len(sequence)):   
+
+
+            self.progress_var.set(float(x)/seqLen * 100)    # Update progress bar
+            self.exportText.set(f"Rendering frame {1+x}...")
+            self.t.update()                                 # update toplevel window
+           
+            
+            self.tumbleGUI.MoveDirection(sequence[x], redraw= False) # Move the board in the specified direction
+            
+
+            # Call function to get and image in memory of the current state of the board, passing it the tile resolution and the line width to use
+            image = self.tumbleGUI.getImageOfBoard(self.tileResInt, self.lineWidthInt)
+
+            # Append the returned image to the image array
+            images.append(image)
+        
+        # Save the image
+
+        self.exportText.set("Encoding...")
+        self.progress_var.set(99.9)
+        self.t.update() 
+        images[0].save(exportFile, save_all=True, append_images=images[1:], duration=framesPerSec, loop=0, version="GIF89a")
+
+        # Set the export Text
+        self.exportText.set("Video saved at " + exportFile)
+
+        # Update the progress bar and update the toplevel to redraw the progress bar
+
+        self.progress_var.set(100)
+        self.t.update()
+
+
+sysargs_parser = argparse.ArgumentParser(
+    prog='TumbleTiles',
+    description='A full tilt simulator',
+    epilog='This codebase is not to be built with AI at any point.'
+)
+
+sysargs_parser.add_argument('-d', '--dark', action='store_true', help="Enable dark mode. Experimental.")  # Experimental 
+sysargs_parser.add_argument('-D', '--debug', action='store_true', help="Debug mode. Experimental.") # WIP
+
+
+def set_darkmode(root):
+    sv_ttk.set_theme("dark")
+
+    if os.name != 'nt': return 
+
+    version = sys.getwindowsversion()
+
+    if version.major != 10: return 
+
+    if version.build >= 22000:
+        # Set the title bar color to the background color on Windows 11 for better appearance
+        pywinstyles.change_header_color(root, "#1c1c1c" if sv_ttk.get_theme() == "dark" else "#fafafa")
+    else:
+        pywinstyles.apply_style(root, "dark" if sv_ttk.get_theme() == "dark" else "normal")
+
+        # A hacky way to update the title bar's color on Windows 10 (it doesn't update instantly like on Windows 11)
+        root.wm_attributes("-alpha", 0.99)
+        root.wm_attributes("-alpha", 1)
+
 
 if __name__ == "__main__":
+    args = sysargs_parser.parse_args()
 
     random.seed()
     root = Tk()
@@ -2102,5 +2222,7 @@ if __name__ == "__main__":
     # root.geometry('300x300')
     mainwin = tumblegui(root)
 
-    # TODO: For threading and mutexes: https://stackoverflow.com/a/54374873
+    if args.dark:
+        set_darkmode(root)
+
     mainloop()
