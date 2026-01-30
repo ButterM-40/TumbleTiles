@@ -7,6 +7,8 @@ Implements the tumble tile model as designed by Robert Schweller and Tim Wylie. 
 
 Python 3.0 port and current developments are maintained by [Sarah Evans](https://github.com/makichiis).
 
+Web Version is available and will not be maintained by [Ramiro Santos](https://github.com/ButterM-40)
+
 
 ### 1.1 Requirements ###
   * Required:
