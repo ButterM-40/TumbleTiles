@@ -240,19 +240,31 @@ header p {
 }
 
 .glue-inputs {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.glue-input-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.glue-label {
+    min-width: 50px;
+    font-size: 13px;
+    font-weight: 600;
+    color: #495057;
 }
 
 .glue-inputs input {
-    padding: 10px;
+    flex: 1;
+    padding: 8px 10px;
     border: 2px solid #dee2e6;
     border-radius: 5px;
-    text-align: center;
-    font-size: 16px;
-    font-weight: bold;
-    text-transform: uppercase;
+    font-size: 14px;
+    font-family: monospace;
 }
 
 .glue-inputs input:focus {
@@ -425,4 +437,62 @@ input[type="file"] {
 
 .control-panel::-webkit-scrollbar-thumb:hover {
     background: #764ba2;
+}
+
+/* Tile Palette Styles */
+.tile-palette {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    max-height: 300px;
+    overflow-y: auto;
+    background: #f9f9f9;
+    min-height: 80px;
+}
+
+.palette-tile {
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.palette-tile:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+}
+
+.tile-palette::-webkit-scrollbar {
+    width: 6px;
+}
+
+.tile-palette::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.tile-palette::-webkit-scrollbar-thumb {
+    background: #667eea;
+    border-radius: 4px;
+}
+
+.tile-palette::-webkit-scrollbar-thumb:hover {
+    background: #764ba2;
+}
+
+#palette-actions {
+    padding: 10px;
+    background: #f0f0f0;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+#palette-actions button {
+    width: 48%;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+#palette-actions button:hover {
+    opacity: 0.9;
 }

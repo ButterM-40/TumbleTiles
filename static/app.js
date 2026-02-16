@@ -15,6 +15,10 @@ let isCtrlPressed = false;
 let undoHistory = [];
 const MAX_UNDO_HISTORY = 50;
 
+// Tile palette system
+let tilePalette = [];
+let selectedPaletteIndex = -1;
+
 // Zoom and pan variables
 let zoom = 1.0;
 let panX = 0;
@@ -41,6 +45,9 @@ function init() {
     
     // Setup event listeners
     setupEventListeners();
+    
+    // Initialize tile palette
+    renderTilePalette();
     
     // Update info
     updateInfo();
@@ -233,6 +240,16 @@ function setupEventListeners() {
     
     document.getElementById('center-board').addEventListener('click', centerBoardHandler);
     
+    // Tile Palette buttons
+    document.getElementById('save-tile-type').addEventListener('click', saveTileType);
+    document.getElementById('modify-tile-type').addEventListener('click', modifyTileType);
+    document.getElementById('delete-tile-type').addEventListener('click', deleteTileType);
+    document.getElementById('save-palette').addEventListener('click', savePalette);
+    document.getElementById('load-palette').addEventListener('click', () => {
+        document.getElementById('palette-input').click();
+    });
+    document.getElementById('palette-input').addEventListener('change', loadPalette);
+    
     // Canvas mouse events for panning
     canvas.addEventListener('mousedown', canvasMouseDown);
     canvas.addEventListener('mousemove', canvasMouseMove);
@@ -340,41 +357,7 @@ function centerBoardHandler() {
 }
 
 function addTileHandler() {
-    const x = parseInt(document.getElementById('tile-x').value);
-    const y = parseInt(document.getElementById('tile-y').value);
-    const color = document.getElementById('tile-color').value;
-    const name = document.getElementById('tile-name').value;
-    const isConcrete = document.getElementById('tile-concrete').checked;
-    
-    const glues = [
-        document.getElementById('glue-n').value || ' ',
-        document.getElementById('glue-e').value || ' ',
-        document.getElementById('glue-s').value || ' ',
-        document.getElementById('glue-w').value || ' '
-    ];
-    
-    if (x < 0 || x >= board.Cols || y < 0 || y >= board.Rows) {
-        alert('Position is outside board boundaries');
-        return;
-    }
-    
-    if (board.coordToTile[x][y] !== null) {
-        alert('A tile already exists at this position');
-        return;
-    }
-    
-    if (isConcrete) {
-        const t = new Tile(null, 0, x, y, [], color, true);
-        t.name = name;
-        board.AddConc(t);
-    } else {
-        const p = new Polyomino(board.poly_id_c++, x, y, glues, color);
-        p.Tiles[0].name = name;
-        board.Add(p);
-    }
-    
-    drawBoard();
-    updateInfo();
+    alert('To add tiles, click directly on the canvas or use Ctrl+A for quick add mode');
 }
 
 function toggleClickMode() {
@@ -546,7 +529,7 @@ function addTileAtMouse(e) {
     ];
     
     if (isConcrete) {
-        const t = new Tile(null, 0, gridX, gridY, [], color, true);
+        const t = new Tile(null, 0, gridX, gridY, glues, color, true);
         t.name = name;
         board.AddConc(t);
     } else {
@@ -616,21 +599,25 @@ function handleKeyPress(e) {
     
     switch(key) {
         case 'w':
+        case 'arrowup':
             direction = 'N';
             break;
         case 'a':
+        case 'arrowleft':
             direction = 'W';
             break;
         case 's':
+        case 'arrowdown':
             direction = 'S';
             break;
         case 'd':
+        case 'arrowright':
             direction = 'E';
             break;
     }
     
     if (direction) {
-        e.preventDefault(); // Prevent scrolling with WASD
+        e.preventDefault(); // Prevent scrolling with WASD and arrow keys
         tumbleDirection(direction);
     }
 }
@@ -834,8 +821,8 @@ function drawTile(tile) {
     ctx.lineWidth = 2 / zoom; // Adjust line width for zoom
     ctx.strokeRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
     
-    // Draw glues if not concrete and showGlues is enabled
-    if (!tile.isConcrete && tile.glues && tile.glues.length === 4 && showGlues) {
+    // Draw glues if showGlues is enabled
+    if (tile.glues && tile.glues.length === 4 && showGlues) {
         ctx.fillStyle = '#000000';
         ctx.font = `${10 / zoom}px Arial`; // Adjust font size for zoom
         ctx.textAlign = 'center';
@@ -922,8 +909,35 @@ function loadFileHandler() {
 
 function parseXML(xmlText) {
     try {
+        // Convert to string if needed
+        if (typeof xmlText !== 'string') {
+            xmlText = String(xmlText);
+        }
+        
+        // Validate that xmlText is not empty and looks like XML
+        if (!xmlText || xmlText.trim().length === 0) {
+            alert('Error: The file is empty. Please select a valid XML file.');
+            return;
+        }
+        
+        // Remove BOM if present
+        if (xmlText.charCodeAt(0) === 0xFEFF) {
+            xmlText = xmlText.slice(1);
+        }
+        
+        const trimmedText = xmlText.trim();
+        if (!trimmedText.startsWith('<')) {
+            // Show first 100 characters to help diagnose the issue
+            const preview = trimmedText.substring(0, 100).replace(/\n/g, '\\n');
+            alert('Error: The file does not appear to be a valid XML file.\n\n' +
+                  'XML files must start with "<".\n\n' +
+                  'File starts with: ' + preview);
+            console.error('Invalid XML content:', preview);
+            return;
+        }
+        
         const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, "text/xml");
+        const xmlDoc = parser.parseFromString(trimmedText, "text/xml");
         
         // Check for parsing errors
         const parserError = xmlDoc.getElementsByTagName('parsererror');
@@ -996,7 +1010,7 @@ function parseXML(xmlText) {
                 
                 // Add tile to board
                 if (isConcrete) {
-                    const t = new Tile(null, 0, x, y, [], color, true);
+                    const t = new Tile(null, 0, x, y, glues, color, true);
                     t.name = name;
                     board.AddConc(t);
                 } else {
@@ -1067,7 +1081,25 @@ function saveFileHandler() {
     for (let conc of board.ConcreteTiles) {
         xmlText += `    <tile x="${conc.x}" y="${conc.y}" color="${conc.color}" concrete="true"`;
         if (conc.name) xmlText += ` name="${conc.name}"`;
-        xmlText += `/>\n`;
+        xmlText += `>\n`;
+        
+        // Save glues for concrete tiles
+        if (conc.glues && conc.glues.length === 4) {
+            if (conc.glues[0] && conc.glues[0] !== ' ') {
+                xmlText += `      <glue direction="N" label="${conc.glues[0]}"/>\n`;
+            }
+            if (conc.glues[1] && conc.glues[1] !== ' ') {
+                xmlText += `      <glue direction="E" label="${conc.glues[1]}"/>\n`;
+            }
+            if (conc.glues[2] && conc.glues[2] !== ' ') {
+                xmlText += `      <glue direction="S" label="${conc.glues[2]}"/>\n`;
+            }
+            if (conc.glues[3] && conc.glues[3] !== ' ') {
+                xmlText += `      <glue direction="W" label="${conc.glues[3]}"/>\n`;
+            }
+        }
+        
+        xmlText += `    </tile>\n`;
     }
     
     xmlText += `  </tiles>\n`;
@@ -1104,23 +1136,352 @@ async function loadExampleHandler() {
         
         const xmlText = await response.text();
         
-        // Parse and load the XML
-        const parser = new DOMParser();
-        const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
-        
-        // Check for parsing errors
-        const parserError = xmlDoc.querySelector('parsererror');
-        if (parserError) {
-            throw new Error('XML parsing error');
-        }
-        
-        parseXML(xmlDoc);
+        // Parse and load the XML directly with parseXML
+        parseXML(xmlText);
         
         console.log(`Loaded example: ${filename}`);
     } catch (error) {
         console.error('Error loading example:', error);
         alert(`Failed to load example: ${error.message}`);
     }
+}
+
+// ============================================
+// Tile Palette System
+// ============================================
+
+function saveTileType() {
+    const name = document.getElementById('tile-name').value || 'Tile ' + (tilePalette.length + 1);
+    const color = document.getElementById('tile-color').value;
+    const isConcrete = document.getElementById('tile-concrete').checked;
+    const glues = [
+        document.getElementById('glue-n').value || ' ',
+        document.getElementById('glue-e').value || ' ',
+        document.getElementById('glue-s').value || ' ',
+        document.getElementById('glue-w').value || ' '
+    ];
+    
+    const tileType = {
+        name: name,
+        color: color,
+        isConcrete: isConcrete,
+        glues: glues
+    };
+    
+    tilePalette.push(tileType);
+    renderTilePalette();
+    
+    console.log('Saved tile type to palette:', tileType);
+}
+
+function renderTilePalette() {
+    const paletteContainer = document.getElementById('tile-palette');
+    paletteContainer.innerHTML = '';
+    
+    if (tilePalette.length === 0) {
+        paletteContainer.innerHTML = '<p style="font-size: 12px; color: #666; padding: 10px;">No tile types saved. Configure a tile and click "Save Current as Tile Type".</p>';
+        document.getElementById('palette-actions').style.display = 'none';
+        selectedPaletteIndex = -1;
+        return;
+    }
+    
+    // Create grid container
+    const grid = document.createElement('div');
+    grid.style.cssText = `
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
+        gap: 20px 8px;
+        padding: 5px;
+    `;
+    
+    tilePalette.forEach((tileType, index) => {
+        // Create wrapper for tile + label
+        const wrapper = document.createElement('div');
+        wrapper.style.cssText = 'position: relative;';
+        
+        const tileButton = document.createElement('div');
+        tileButton.className = 'palette-tile';
+        tileButton.dataset.index = index;
+        
+        const isSelected = index === selectedPaletteIndex;
+        
+        tileButton.style.cssText = `
+            background-color: ${tileType.color};
+            border: ${isSelected ? '3px' : '2px'} solid ${isSelected ? '#667eea' : '#333'};
+            border-radius: 6px;
+            width: 60px;
+            height: 60px;
+            cursor: pointer;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: ${isSelected ? '0 0 10px rgba(102, 126, 234, 0.5)' : 'none'};
+            transition: all 0.2s;
+        `;
+        
+        // Add glue indicators
+        const glueOverlay = document.createElement('div');
+        glueOverlay.style.cssText = `
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: none;
+            font-size: 8px;
+            color: #000;
+            font-weight: bold;
+            text-shadow: 0 0 2px #fff;
+            padding: 2px;
+        `;
+        
+        if (tileType.glues[0] && tileType.glues[0] !== ' ') {
+            const n = document.createElement('div');
+            n.textContent = tileType.glues[0];
+            n.style.cssText = 'max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+            glueOverlay.appendChild(n);
+        } else {
+            glueOverlay.appendChild(document.createElement('div'));
+        }
+        
+        const middle = document.createElement('div');
+        middle.style.cssText = 'display: flex; justify-content: space-between; width: 100%; padding: 0 2px;';
+        
+        if (tileType.glues[3] && tileType.glues[3] !== ' ') {
+            const w = document.createElement('div');
+            w.textContent = tileType.glues[3];
+            w.style.cssText = 'max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+            middle.appendChild(w);
+        } else {
+            middle.appendChild(document.createElement('div'));
+        }
+        
+        if (tileType.glues[1] && tileType.glues[1] !== ' ') {
+            const e = document.createElement('div');
+            e.textContent = tileType.glues[1];
+            e.style.cssText = 'max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+            middle.appendChild(e);
+        } else {
+            middle.appendChild(document.createElement('div'));
+        }
+        
+        glueOverlay.appendChild(middle);
+        
+        if (tileType.glues[2] && tileType.glues[2] !== ' ') {
+            const s = document.createElement('div');
+            s.textContent = tileType.glues[2];
+            s.style.cssText = 'max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+            glueOverlay.appendChild(s);
+        } else {
+            glueOverlay.appendChild(document.createElement('div'));
+        }
+        
+        tileButton.appendChild(glueOverlay);
+        
+        // Add name label
+        const nameLabel = document.createElement('div');
+        nameLabel.style.cssText = `
+            position: absolute;
+            bottom: -18px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 10px;
+            color: #333;
+            white-space: nowrap;
+            max-width: 80px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        `;
+        nameLabel.textContent = tileType.name;
+        nameLabel.title = tileType.name;
+        tileButton.appendChild(nameLabel);
+        
+        // Add concrete indicator
+        if (tileType.isConcrete) {
+            const concreteIndicator = document.createElement('div');
+            concreteIndicator.style.cssText = `
+                position: absolute;
+                top: 2px;
+                right: 2px;
+                background: rgba(0, 0, 0, 0.6);
+                color: white;
+                border-radius: 3px;
+                padding: 1px 3px;
+                font-size: 8px;
+                font-weight: bold;
+            `;
+            concreteIndicator.textContent = 'C';
+            tileButton.appendChild(concreteIndicator);
+        }
+        
+        tileButton.onclick = () => {
+            selectPaletteTile(index);
+        };
+        
+        wrapper.appendChild(tileButton);
+        grid.appendChild(wrapper);
+    });
+    
+    paletteContainer.appendChild(grid);
+}
+
+function selectPaletteTile(index) {
+    if (selectedPaletteIndex === index) {
+        // Deselect if clicking the same tile
+        selectedPaletteIndex = -1;
+        document.getElementById('palette-actions').style.display = 'none';
+    } else {
+        selectedPaletteIndex = index;
+        const tileType = tilePalette[index];
+        loadTileTypeToInputs(tileType);
+        document.getElementById('palette-actions').style.display = 'block';
+    }
+    renderTilePalette();
+}
+
+function loadTileTypeToInputs(tileType) {
+    document.getElementById('tile-color').value = tileType.color;
+    document.getElementById('tile-name').value = tileType.name;
+    document.getElementById('tile-concrete').checked = tileType.isConcrete;
+    document.getElementById('glue-n').value = tileType.glues[0] === ' ' ? '' : tileType.glues[0];
+    document.getElementById('glue-e').value = tileType.glues[1] === ' ' ? '' : tileType.glues[1];
+    document.getElementById('glue-s').value = tileType.glues[2] === ' ' ? '' : tileType.glues[2];
+    document.getElementById('glue-w').value = tileType.glues[3] === ' ' ? '' : tileType.glues[3];
+    
+    console.log('Loaded tile type from palette:', tileType);
+}
+
+function modifyTileType() {
+    if (selectedPaletteIndex < 0) {
+        alert('No tile selected. Please select a tile from the palette first.');
+        return;
+    }
+    
+    const oldTileType = tilePalette[selectedPaletteIndex];
+    const oldName = oldTileType.name;
+    
+    // Get current values from inputs
+    const newTileType = {
+        name: document.getElementById('tile-name').value || 'Tile ' + (selectedPaletteIndex + 1),
+        color: document.getElementById('tile-color').value,
+        isConcrete: document.getElementById('tile-concrete').checked,
+        glues: [
+            document.getElementById('glue-n').value || ' ',
+            document.getElementById('glue-e').value || ' ',
+            document.getElementById('glue-s').value || ' ',
+            document.getElementById('glue-w').value || ' '
+        ]
+    };
+    
+    // Update the palette
+    tilePalette[selectedPaletteIndex] = newTileType;
+    
+    // Check if we should update board tiles
+    const updateBoard = document.getElementById('update-board-tiles').checked;
+    if (updateBoard && oldName) {
+        let updatedCount = 0;
+        
+        // Update polyominoes
+        for (let p of board.Polyominoes) {
+            for (let tile of p.Tiles) {
+                if (tile.name === oldName) {
+                    tile.color = newTileType.color;
+                    tile.name = newTileType.name;
+                    tile.glues = [...newTileType.glues];
+                    updatedCount++;
+                }
+            }
+        }
+        
+        // Update concrete tiles
+        for (let conc of board.ConcreteTiles) {
+            if (conc.name === oldName) {
+                conc.color = newTileType.color;
+                conc.name = newTileType.name;
+                conc.glues = [...newTileType.glues];
+                updatedCount++;
+            }
+        }
+        
+        if (updatedCount > 0) {
+            drawBoard();
+            console.log(`Updated ${updatedCount} tiles on the board`);
+            alert(`Modified tile type and updated ${updatedCount} tile(s) on the board.`);
+        } else {
+            alert('Modified tile type. No matching tiles found on the board.');
+        }
+    } else {
+        alert('Modified tile type in palette.');
+    }
+    
+    renderTilePalette();
+    console.log('Modified tile type:', newTileType);
+}
+
+function deleteTileType() {
+    if (selectedPaletteIndex < 0) {
+        alert('No tile selected. Please select a tile from the palette first.');
+        return;
+    }
+    
+    const tileType = tilePalette[selectedPaletteIndex];
+    if (confirm(`Delete tile type "${tileType.name}"?`)) {
+        tilePalette.splice(selectedPaletteIndex, 1);
+        selectedPaletteIndex = -1;
+        document.getElementById('palette-actions').style.display = 'none';
+        renderTilePalette();
+        console.log('Deleted tile type');
+    }
+}
+
+function savePalette() {
+    if (tilePalette.length === 0) {
+        alert('No tile types in palette to save.');
+        return;
+    }
+    
+    const paletteData = JSON.stringify(tilePalette, null, 2);
+    const blob = new Blob([paletteData], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'tile-palette.json';
+    a.click();
+    
+    URL.revokeObjectURL(url);
+    console.log('Palette exported');
+}
+
+function loadPalette(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        try {
+            const loadedPalette = JSON.parse(event.target.result);
+            
+            if (!Array.isArray(loadedPalette)) {
+                alert('Invalid palette file format.');
+                return;
+            }
+            
+            tilePalette = loadedPalette;
+            renderTilePalette();
+            console.log('Palette imported:', tilePalette);
+            alert(`Successfully loaded ${tilePalette.length} tile type(s).`);
+        } catch (error) {
+            console.error('Error loading palette:', error);
+            alert('Error loading palette file: ' + error.message);
+        }
+    };
+    reader.readAsText(file);
 }
 
 // Initialize on page load

@@ -27,7 +27,7 @@ class Tile {
         
         if (isConcrete === true || isConcrete === "True") {
             this.isConcrete = true;
-            this.glues = [];
+            this.glues = glues || [];
         } else {
             this.isConcrete = false;
             this.glues = glues || [];

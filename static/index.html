@@ -47,7 +47,7 @@
                 </details>
 
                 <!-- Board Tab -->
-                <details class="collapsible-section" open>
+                <details class="collapsible-section">
                     <summary>Board Settings</summary>
                     <div class="section-content">
                         <div class="form-group">
@@ -142,14 +142,28 @@
                 <details class="collapsible-section">
                     <summary>Tile</summary>
                     <div class="section-content">
-                        <div class="form-group">
-                            <label for="tile-x">X Position:</label>
-                            <input type="number" id="tile-x" value="7" min="0">
+                        <h3 style="margin-top: 10px; font-size: 1.1em;">Tile Palette</h3>
+                        <div class="tile-palette" id="tile-palette">
+                            <!-- Tile palette items will be added here dynamically -->
                         </div>
-                        <div class="form-group">
-                            <label for="tile-y">Y Position:</label>
-                            <input type="number" id="tile-y" value="7" min="0">
+                        <div id="palette-actions" style="margin-top: 10px; display: none;">
+                            <button id="modify-tile-type" style="font-size: 12px; padding: 5px 10px; background: #10b981;">Modify Selected</button>
+                            <button id="delete-tile-type" style="font-size: 12px; padding: 5px 10px; background: #ef4444;">Delete Selected</button>
+                            <div style="margin-top: 8px;">
+                                <label style="font-size: 12px;">
+                                    <input type="checkbox" id="update-board-tiles">
+                                    Update all board tiles with same name
+                                </label>
+                            </div>
                         </div>
+                        <div style="margin-top: 10px;">
+                            <button id="save-tile-type" style="font-size: 12px; padding: 5px 10px;">Save Current as Tile Type</button>
+                            <button id="save-palette" style="font-size: 12px; padding: 5px 10px; margin-top: 5px;">Export Palette</button>
+                            <input type="file" id="palette-input" accept=".json" style="display: none;">
+                            <button id="load-palette" style="font-size: 12px; padding: 5px 10px; margin-top: 5px;">Import Palette</button>
+                        </div>
+                        
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">Current Tile Settings</h3>
                         <div class="form-group">
                             <label for="tile-color">Color:</label>
                             <input type="color" id="tile-color" value="#3498db">
@@ -159,12 +173,24 @@
                             <input type="text" id="tile-name" placeholder="Tile name">
                         </div>
                         <div class="glues-group">
-                            <label>Glues:</label>
+                            <label>Glues (use commas for multiple):</label>
                             <div class="glue-inputs">
-                                <input type="text" id="glue-n" placeholder="N" maxlength="1">
-                                <input type="text" id="glue-e" placeholder="E" maxlength="1">
-                                <input type="text" id="glue-s" placeholder="S" maxlength="1">
-                                <input type="text" id="glue-w" placeholder="W" maxlength="1">
+                                <div class="glue-input-row">
+                                    <label class="glue-label">North:</label>
+                                    <input type="text" id="glue-n" placeholder="e.g., A or A,B,C">
+                                </div>
+                                <div class="glue-input-row">
+                                    <label class="glue-label">East:</label>
+                                    <input type="text" id="glue-e" placeholder="e.g., A or A,B,C">
+                                </div>
+                                <div class="glue-input-row">
+                                    <label class="glue-label">South:</label>
+                                    <input type="text" id="glue-s" placeholder="e.g., A or A,B,C">
+                                </div>
+                                <div class="glue-input-row">
+                                    <label class="glue-label">West:</label>
+                                    <input type="text" id="glue-w" placeholder="e.g., A or A,B,C">
+                                </div>
                             </div>
                         </div>
                         <div class="form-group">
@@ -221,8 +247,8 @@
                         
                         <h3 style="font-size: 1.1em; margin-top: 20px; margin-bottom: 15px;">Contact</h3>
                         <p style="margin-bottom: 10px;">
-                            <a href="mailto:schwellerr@gmail.com" style="color: #667eea; text-decoration: none;">
-                                schwellerr@gmail.com
+                            <a href="mailto:robert.schweller@utrgv.edu" style="color: #667eea; text-decoration: none;">
+                                robert.schweller@utrgv.edu
                             </a>
                         </p>
                         
