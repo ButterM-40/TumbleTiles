@@ -27,6 +27,17 @@ let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
 
+// Performance optimization variables
+let performanceMode = false;
+let renderTimeout = null;
+let lastRenderTime = 0;
+const RENDER_THROTTLE = 16; // ~60fps
+let mouseMoveTimeout = null;
+let offscreenCanvas = null;
+let offscreenCtx = null;
+const baseCellSize = 30;
+let useColorBatching = false;
+
 // Initialize the application
 function init() {
     canvas = document.getElementById('board-canvas');
@@ -81,6 +92,11 @@ function setupEventListeners() {
     });
     document.getElementById('show-glues').addEventListener('change', (e) => {
         showGlues = e.target.checked;
+        drawBoard();
+    });
+    document.getElementById('performance-mode').addEventListener('change', (e) => {
+        performanceMode = e.target.checked;
+        console.log('Performance mode:', performanceMode ? 'enabled' : 'disabled');
         drawBoard();
     });
     
@@ -347,11 +363,11 @@ function centerBoardHandler() {
     const zoomY = containerHeight / boardHeight;
     
     // Use the smaller zoom to fit entire board
-    zoom = Math.min(zoomX, zoomY, 1.0); // Don't zoom in beyond 1.0
+    zoom = Math.min(zoomX, zoomY, 1.0) * 0.9; // Don't zoom in beyond 1.0, add 10% padding
     
-    // Center the board
-    panX = 0;
-    panY = 0;
+    // Center the board in the viewport
+    panX = (canvas.width - boardWidth * zoom) / 2;
+    panY = (canvas.height - boardHeight * zoom) / 2;
     
     drawBoard();
 }
@@ -455,6 +471,15 @@ function canvasMouseMove(e) {
     
     lastMouseX = e.clientX;
     lastMouseY = e.clientY;
+    
+    // Throttle redraw during pan for better performance
+    if (mouseMoveTimeout) {
+        return; // Skip this redraw
+    }
+    
+    mouseMoveTimeout = setTimeout(() => {
+        mouseMoveTimeout = null;
+    }, 16); // Throttle to ~60fps
     
     drawBoard();
 }
@@ -632,6 +657,12 @@ function tumbleDirection(direction) {
 }
 
 function saveStateToHistory() {
+    // Skip undo history for very large boards to save memory
+    const totalTiles = board.Polyominoes.length + board.ConcreteTiles.length;
+    if (totalTiles > 5000) {
+        return; // No undo for huge boards
+    }
+    
     const state = {
         polyominoes: board.Polyominoes.map(p => ({
             id: p.id,
@@ -657,8 +688,9 @@ function saveStateToHistory() {
     
     undoHistory.push(state);
     
-    // Limit history size
-    if (undoHistory.length > MAX_UNDO_HISTORY) {
+    // Limit history size (smaller for large boards)
+    const maxHistory = totalTiles > 2000 ? 10 : MAX_UNDO_HISTORY;
+    if (undoHistory.length > maxHistory) {
         undoHistory.shift();
     }
 }
@@ -763,6 +795,20 @@ function stopScriptHandler() {
 }
 
 function drawBoard() {
+    // Debounce rapid redraws
+    if (renderTimeout) {
+        cancelAnimationFrame(renderTimeout);
+    }
+    
+    renderTimeout = requestAnimationFrame(() => {
+        drawBoardImmediate();
+        renderTimeout = null;
+    });
+}
+
+function drawBoardImmediate() {
+    const startTime = performance.now();
+    
     // Save context state
     ctx.save();
     
@@ -774,41 +820,120 @@ function drawBoard() {
     ctx.translate(panX, panY);
     ctx.scale(zoom, zoom);
     
-    // Draw grid
-    ctx.strokeStyle = '#e0e0e0';
-    ctx.lineWidth = 1 / zoom; // Keep line width consistent
+    // Calculate visible area (viewport culling)
+    const viewMinX = Math.floor(-panX / zoom / cellSize) - 1;
+    const viewMinY = Math.floor(-panY / zoom / cellSize) - 1;
+    const viewMaxX = Math.ceil((canvas.width - panX) / zoom / cellSize) + 1;
+    const viewMaxY = Math.ceil((canvas.height - panY) / zoom / cellSize) + 1;
     
-    for (let i = 0; i <= board.Cols; i++) {
+    // Clamp to board boundaries
+    const minX = Math.max(0, viewMinX);
+    const minY = Math.max(0, viewMinY);
+    const maxX = Math.min(board.Cols, viewMaxX);
+    const maxY = Math.min(board.Rows, viewMaxY);
+    
+    // Draw grid (only visible portion)
+    if (!performanceMode) {
+        ctx.strokeStyle = '#e0e0e0';
+        ctx.lineWidth = 1 / zoom;
+        
         ctx.beginPath();
-        ctx.moveTo(i * cellSize, 0);
-        ctx.lineTo(i * cellSize, board.Rows * cellSize);
-        ctx.stroke();
-    }
-    
-    for (let i = 0; i <= board.Rows; i++) {
-        ctx.beginPath();
-        ctx.moveTo(0, i * cellSize);
-        ctx.lineTo(board.Cols * cellSize, i * cellSize);
-        ctx.stroke();
-    }
-    
-    // Draw tiles
-    for (let p of board.Polyominoes) {
-        for (let tile of p.Tiles) {
-            drawTile(tile);
+        for (let i = minX; i <= maxX; i++) {
+            ctx.moveTo(i * cellSize, minY * cellSize);
+            ctx.lineTo(i * cellSize, maxY * cellSize);
         }
+        for (let i = minY; i <= maxY; i++) {
+            ctx.moveTo(minX * cellSize, i * cellSize);
+            ctx.lineTo(maxX * cellSize, i * cellSize);
+        }
+        ctx.stroke();
     }
     
-    // Draw concrete tiles
-    for (let conc of board.ConcreteTiles) {
-        drawTile(conc);
+    // Determine level of detail based on zoom
+    const useHighDetail = zoom >= 0.5 && !performanceMode;
+    
+    // Draw tiles (only visible ones)
+    let tilesDrawn = 0;
+    
+    if (useColorBatching && performanceMode) {
+        // Batch tiles by color for fewer fillStyle changes
+        const tilesByColor = new Map();
+        
+        // Collect visible polyomino tiles
+        for (let p of board.Polyominoes) {
+            for (let tile of p.Tiles) {
+                if (tile.x >= minX && tile.x < maxX && tile.y >= minY && tile.y < maxY) {
+                    if (!tilesByColor.has(tile.color)) {
+                        tilesByColor.set(tile.color, []);
+                    }
+                    tilesByColor.get(tile.color).push(tile);
+                }
+            }
+        }
+        
+        // Collect visible concrete tiles
+        for (let conc of board.ConcreteTiles) {
+            if (conc.x >= minX && conc.x < maxX && conc.y >= minY && conc.y < maxY) {
+                if (!tilesByColor.has(conc.color)) {
+                    tilesByColor.set(conc.color, []);
+                }
+                tilesByColor.get(conc.color).push(conc);
+            }
+        }
+        
+        // Draw in batches by color
+        for (let [color, tiles] of tilesByColor) {
+            ctx.fillStyle = color;
+            for (let tile of tiles) {
+                const x = tile.x * cellSize;
+                const y = tile.y * cellSize;
+                ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+                tilesDrawn++;
+            }
+        }
+        
+        // Draw borders in one batch
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 2 / zoom;
+        for (let [_, tiles] of tilesByColor) {
+            for (let tile of tiles) {
+                const x = tile.x * cellSize;
+                const y = tile.y * cellSize;
+                ctx.strokeRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+            }
+        }
+    } else {
+        // Normal rendering
+        for (let p of board.Polyominoes) {
+            for (let tile of p.Tiles) {
+                if (tile.x >= minX && tile.x < maxX && tile.y >= minY && tile.y < maxY) {
+                    drawTile(tile, useHighDetail);
+                    tilesDrawn++;
+                }
+            }
+        }
+        
+        for (let conc of board.ConcreteTiles) {
+            if (conc.x >= minX && conc.x < maxX && conc.y >= minY && conc.y < maxY) {
+                drawTile(conc, useHighDetail);
+                tilesDrawn++;
+            }
+        }
     }
     
     // Restore context state
     ctx.restore();
+    
+    const endTime = performance.now();
+    const renderTime = endTime - startTime;
+    
+    // Log performance stats for debugging
+    if (renderTime > 50) {
+        console.warn(`Rendering: ${renderTime.toFixed(1)}ms, Tiles drawn: ${tilesDrawn}`);
+    }
 }
 
-function drawTile(tile) {
+function drawTile(tile, useHighDetail = true) {
     const x = tile.x * cellSize;
     const y = tile.y * cellSize;
     
@@ -820,6 +945,16 @@ function drawTile(tile) {
     ctx.strokeStyle = '#000000';
     ctx.lineWidth = 2 / zoom; // Adjust line width for zoom
     ctx.strokeRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+    
+    // Skip detailed rendering in performance mode or when zoomed out
+    if (performanceMode || !useHighDetail) {
+        // In performance mode, still show concrete indicators
+        if (tile.isConcrete && performanceMode) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+        }
+        return;
+    }
     
     // Draw glues if showGlues is enabled
     if (tile.glues && tile.glues.length === 4 && showGlues) {
@@ -1030,15 +1165,58 @@ function parseXML(xmlText) {
         }
         updateGlueButtonState();
         
-        // Reset zoom and pan for new file
-        zoom = 1.0;
-        panX = 0;
-        panY = 0;
+        const totalTiles = board.Polyominoes.length + board.ConcreteTiles.length;
+        
+        // Auto-adjust cell size for very large boards
+        if (totalTiles > 5000) {
+            cellSize = 10; // Very small cells for huge boards
+            useColorBatching = true;
+        } else if (totalTiles > 2000) {
+            cellSize = 15; // Small cells for large boards
+            useColorBatching = true;
+        } else if (totalTiles > 1000) {
+            cellSize = 20; // Medium cells
+            useColorBatching = true;
+        } else {
+            cellSize = baseCellSize; // Default size
+            useColorBatching = false;
+        }
+        
+        // Resize canvas with new cell size
+        resizeCanvas();
+        
+        // Auto-zoom and center for large boards
+        if (totalTiles > 1000) {
+            // Calculate zoom to fit board in viewport
+            const boardWidth = board.Cols * cellSize;
+            const boardHeight = board.Rows * cellSize;
+            const zoomX = canvas.width / boardWidth;
+            const zoomY = canvas.height / boardHeight;
+            zoom = Math.min(zoomX, zoomY, 1.0) * 0.9; // 90% of fit to add padding
+            
+            // Center the board
+            panX = (canvas.width - boardWidth * zoom) / 2;
+            panY = (canvas.height - boardHeight * zoom) / 2;
+        } else {
+            // Reset zoom and pan for smaller boards
+            zoom = 1.0;
+            panX = 0;
+            panY = 0;
+        }
         
         drawBoard();
         updateInfo();
         
-        console.log('XML loaded successfully. Tiles:', board.Polyominoes.length + board.ConcreteTiles.length);
+        console.log('XML loaded successfully. Tiles:', totalTiles, 'Cell size:', cellSize, 'Zoom:', zoom.toFixed(2));
+        
+        // Auto-enable performance mode for large boards
+        if (totalTiles > 1000) {
+            performanceMode = true;
+            document.getElementById('performance-mode').checked = true;
+            console.log(`Performance mode auto-enabled (color batching: ${useColorBatching})`);
+            console.log('Tip: You can disable Performance Mode to see labels and glues (may be slower)');
+            drawBoard();
+        }
     } catch (error) {
         console.error('Error loading XML:', error);
         alert('Error loading XML file: ' + error.message);
@@ -1128,7 +1306,9 @@ async function loadExampleHandler() {
     
     try {
         // Fetch the example file from the Verification folder
-        const response = await fetch(`../Verification/${filename}`);
+        // Encode the filename to handle spaces and special characters
+        const encodedFilename = encodeURIComponent(filename);
+        const response = await fetch(`../Verification/${encodedFilename}`);
         
         if (!response.ok) {
             throw new Error(`Failed to load example: ${response.statusText}`);
