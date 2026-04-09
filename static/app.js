@@ -26,6 +26,14 @@ let panY = 0;
 let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
+let selectMode = false;
+let selectionDragStart = null;
+let selectionDragCurrent = null;
+let selectedTiles = new Set();
+let copiedSelection = [];
+let selectionOrigin = null;
+let selectionMoveStart = null;
+let selectionMoveOffset = null;
 
 // Performance optimization variables
 let performanceMode = false;
@@ -255,6 +263,9 @@ function setupEventListeners() {
     });
     
     document.getElementById('center-board').addEventListener('click', centerBoardHandler);
+    document.getElementById('toggle-select-mode').addEventListener('click', toggleSelectMode);
+    document.getElementById('copy-selection').addEventListener('click', copySelectionHandler);
+    document.getElementById('clear-selection').addEventListener('click', clearSelectionHandler);
     
     // Tile Palette buttons
     document.getElementById('save-tile-type').addEventListener('click', saveTileType);
@@ -317,6 +328,7 @@ function resizeBoardHandler() {
     
     // Create new board
     board = new Board(height, width);
+    clearSelection(false);
     
     // Re-add tiles
     for (let tileData of tiles) {
@@ -345,6 +357,7 @@ function resizeBoardHandler() {
 function clearBoardHandler() {
     if (confirm('Clear all tiles from the board?')) {
         board.clear();
+        clearSelection(false);
         drawBoard();
         updateInfo();
     }
@@ -391,6 +404,8 @@ function toggleAddMode() {
     if (quickAddMode) {
         quickDeleteMode = false; // Disable delete mode
         clickToAddMode = false; // Disable regular click-to-add
+        selectMode = false;
+        clearSelection(false);
         const btn = document.getElementById('toggle-click-mode');
         btn.textContent = 'Enable Click-to-Add';
         btn.classList.remove('active');
@@ -403,6 +418,8 @@ function toggleDeleteMode() {
     if (quickDeleteMode) {
         quickAddMode = false; // Disable add mode
         clickToAddMode = false; // Disable regular click-to-add
+        selectMode = false;
+        clearSelection(false);
         const btn = document.getElementById('toggle-click-mode');
         btn.textContent = 'Enable Click-to-Add';
         btn.classList.remove('active');
@@ -413,6 +430,7 @@ function toggleDeleteMode() {
 function updateModeButtons() {
     const addBtn = document.getElementById('toggle-add-mode');
     const deleteBtn = document.getElementById('toggle-delete-mode');
+    const selectBtn = document.getElementById('toggle-select-mode');
     
     if (quickAddMode) {
         addBtn.classList.add('active');
@@ -427,13 +445,40 @@ function updateModeButtons() {
     } else {
         deleteBtn.classList.remove('active');
     }
+
+    if (selectMode) {
+        selectBtn.classList.add('active');
+        selectBtn.textContent = 'Disable Select Mode';
+        canvas.style.cursor = selectionMoveStart ? 'grabbing' : 'crosshair';
+    } else {
+        selectBtn.classList.remove('active');
+        selectBtn.textContent = 'Enable Select Mode';
+    }
     
-    if (!quickAddMode && !quickDeleteMode) {
+    if (!quickAddMode && !quickDeleteMode && !selectMode) {
         canvas.style.cursor = 'default';
     }
 }
 
 function canvasMouseDown(e) {
+    if (selectMode) {
+        const start = getGridCoordinatesFromEvent(e, true);
+        if (!start) return;
+        isDragging = false;
+        if (selectedTiles.size > 0 && selectedTiles.has(tileKey(start.x, start.y))) {
+            selectionMoveStart = start;
+            selectionMoveOffset = { x: 0, y: 0 };
+            updateModeButtons();
+            setSelectionStatus('Dragging selection...');
+            drawBoard();
+            return;
+        }
+        selectionDragStart = start;
+        selectionDragCurrent = start;
+        drawBoard();
+        return;
+    }
+
     // Don't pan in click-to-add mode or quick modes
     if (clickToAddMode || quickAddMode || quickDeleteMode) {
         if (quickAddMode) {
@@ -451,6 +496,23 @@ function canvasMouseDown(e) {
 }
 
 function canvasMouseMove(e) {
+    if (selectMode && selectionMoveStart && (e.buttons & 1) === 1) {
+        const current = getGridCoordinatesFromEvent(e, true);
+        if (!current) return;
+        selectionMoveOffset = {
+            x: current.x - selectionMoveStart.x,
+            y: current.y - selectionMoveStart.y
+        };
+        drawBoard();
+        return;
+    }
+
+    if (selectMode && selectionDragStart && (e.buttons & 1) === 1) {
+        selectionDragCurrent = getGridCoordinatesFromEvent(e, true);
+        drawBoard();
+        return;
+    }
+
     // Handle drag-to-add/delete in quick modes (no isDragging check needed)
     if (e.buttons === 1 && (quickAddMode || quickDeleteMode)) {
         if (quickAddMode) {
@@ -485,6 +547,31 @@ function canvasMouseMove(e) {
 }
 
 function canvasMouseUp(e) {
+    if (selectMode && selectionMoveStart) {
+        const offset = selectionMoveOffset || { x: 0, y: 0 };
+        selectionMoveStart = null;
+        selectionMoveOffset = null;
+        updateModeButtons();
+        if (offset.x !== 0 || offset.y !== 0) {
+            moveSelectionByOffset(offset.x, offset.y);
+        } else {
+            setSelectionStatus(`Selected ${selectedTiles.size} tile(s).`);
+            drawBoard();
+        }
+        return;
+    }
+
+    if (selectMode && selectionDragStart) {
+        const end = selectionDragCurrent || getGridCoordinatesFromEvent(e, true);
+        if (end) {
+            captureSelectionRectangle(selectionDragStart, end);
+        }
+        selectionDragStart = null;
+        selectionDragCurrent = null;
+        drawBoard();
+        return;
+    }
+
     isDragging = false;
     canvas.style.cursor = clickToAddMode ? 'crosshair' : 'grab';
 }
@@ -509,6 +596,8 @@ function canvasWheel(e) {
 }
 
 function canvasClickHandler(e) {
+    if (selectMode) return;
+
     // Handle quick add mode
     if (quickAddMode) {
         addTileAtMouse(e);
@@ -529,18 +618,9 @@ function canvasClickHandler(e) {
 }
 
 function addTileAtMouse(e) {
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    // Convert screen coordinates to board coordinates accounting for zoom and pan
-    const boardX = (mouseX - panX) / zoom;
-    const boardY = (mouseY - panY) / zoom;
-    
-    const gridX = Math.floor(boardX / cellSize);
-    const gridY = Math.floor(boardY / cellSize);
-    
-    if (gridX < 0 || gridX >= board.Cols || gridY < 0 || gridY >= board.Rows) return;
+    const coords = getGridCoordinatesFromEvent(e);
+    if (!coords) return;
+    const { x: gridX, y: gridY } = coords;
     if (board.coordToTile[gridX][gridY] !== null) return;
     
     const name = document.getElementById('tile-name').value;
@@ -568,47 +648,268 @@ function addTileAtMouse(e) {
 }
 
 function deleteTileAtMouse(e) {
-    const rect = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-    
-    // Convert screen coordinates to board coordinates
-    const boardX = (mouseX - panX) / zoom;
-    const boardY = (mouseY - panY) / zoom;
-    
-    const gridX = Math.floor(boardX / cellSize);
-    const gridY = Math.floor(boardY / cellSize);
-    
-    if (gridX < 0 || gridX >= board.Cols || gridY < 0 || gridY >= board.Rows) return;
+    const coords = getGridCoordinatesFromEvent(e);
+    if (!coords) return;
+    const { x: gridX, y: gridY } = coords;
     
     const tile = board.coordToTile[gridX][gridY];
     if (!tile) return;
+    removeTileAtCoord(gridX, gridY);
     
-    // Remove tile
-    if (tile.isConcrete) {
-        const index = board.ConcreteTiles.indexOf(tile);
-        if (index > -1) {
-            board.ConcreteTiles.splice(index, 1);
-            board.coordToTile[gridX][gridY] = null;
-        }
+    drawBoard();
+    updateInfo();
+}
+
+function getGridCoordinatesFromEvent(e, clampToBoard = false) {
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const boardX = (mouseX - panX) / zoom;
+    const boardY = (mouseY - panY) / zoom;
+    let x = Math.floor(boardX / cellSize);
+    let y = Math.floor(boardY / cellSize);
+    
+    if (clampToBoard) {
+        if (board.Cols < 1 || board.Rows < 1) return null;
+        x = Math.max(0, Math.min(board.Cols - 1, x));
+        y = Math.max(0, Math.min(board.Rows - 1, y));
+        return { x, y };
+    }
+    
+    if (x < 0 || x >= board.Cols || y < 0 || y >= board.Rows) {
+        return null;
+    }
+    
+    return { x, y };
+}
+
+function tileKey(x, y) {
+    return `${x},${y}`;
+}
+
+function parseTileKey(key) {
+    const [x, y] = key.split(',').map(Number);
+    return { x, y };
+}
+
+function clearSelection(redraw = true) {
+    selectedTiles.clear();
+    selectionDragStart = null;
+    selectionDragCurrent = null;
+    selectionOrigin = null;
+    selectionMoveStart = null;
+    selectionMoveOffset = null;
+    updateModeButtons();
+    if (redraw) {
+        drawBoard();
+    }
+}
+
+function clearSelectionHandler() {
+    clearSelection();
+    setSelectionStatus('Selection cleared.');
+}
+
+function setSelectionStatus(message) {
+    const status = document.getElementById('selection-status');
+    if (status) {
+        status.textContent = message;
+    }
+}
+
+function toggleSelectMode() {
+    selectMode = !selectMode;
+    if (selectMode) {
+        quickAddMode = false;
+        quickDeleteMode = false;
+        clickToAddMode = false;
+        const clickModeBtn = document.getElementById('toggle-click-mode');
+        clickModeBtn.textContent = 'Enable Click-to-Add';
+        clickModeBtn.classList.remove('active');
+        setSelectionStatus('Select mode enabled. Drag to select; drag selected tiles to move.');
     } else {
-        const parent = tile.parent;
-        if (parent) {
-            const tileIndex = parent.Tiles.indexOf(tile);
-            if (tileIndex > -1) {
-                parent.Tiles.splice(tileIndex, 1);
-                board.coordToTile[gridX][gridY] = null;
-            }
-            // Remove empty polyominoes
-            if (parent.Tiles.length === 0) {
-                const polyIndex = board.Polyominoes.indexOf(parent);
-                if (polyIndex > -1) {
-                    board.Polyominoes.splice(polyIndex, 1);
-                }
+        selectionDragStart = null;
+        selectionDragCurrent = null;
+        selectionMoveStart = null;
+        selectionMoveOffset = null;
+        setSelectionStatus('Selection mode is off.');
+    }
+    updateModeButtons();
+    drawBoard();
+}
+
+function captureSelectionRectangle(start, end) {
+    const minX = Math.max(0, Math.min(start.x, end.x));
+    const maxX = Math.min(board.Cols - 1, Math.max(start.x, end.x));
+    const minY = Math.max(0, Math.min(start.y, end.y));
+    const maxY = Math.min(board.Rows - 1, Math.max(start.y, end.y));
+    
+    selectedTiles.clear();
+    for (let x = minX; x <= maxX; x++) {
+        for (let y = minY; y <= maxY; y++) {
+            if (board.coordToTile[x][y]) {
+                selectedTiles.add(tileKey(x, y));
             }
         }
     }
     
+    if (selectedTiles.size === 0) {
+        selectionOrigin = null;
+        setSelectionStatus('No tiles found in that area.');
+        return;
+    }
+    
+    selectionOrigin = { x: minX, y: minY };
+    setSelectionStatus(`Selected ${selectedTiles.size} tile(s).`);
+}
+
+function copySelectionHandler() {
+    if (selectedTiles.size === 0) {
+        alert('No tiles selected. Enable select mode and drag over tiles first.');
+        return;
+    }
+    
+    const coords = Array.from(selectedTiles).map(parseTileKey);
+    const minX = Math.min(...coords.map(c => c.x));
+    const minY = Math.min(...coords.map(c => c.y));
+    copiedSelection = [];
+    
+    for (const { x, y } of coords) {
+        const tile = board.coordToTile[x][y];
+        if (!tile) continue;
+        copiedSelection.push({
+            dx: x - minX,
+            dy: y - minY,
+            color: tile.color,
+            glues: [...tile.glues],
+            name: tile.name || '',
+            isConcrete: tile.isConcrete === true
+        });
+    }
+    
+    selectionOrigin = { x: minX, y: minY };
+    setSelectionStatus(`Copied ${copiedSelection.length} tile(s).`);
+}
+
+function validatePlacement(baseX, baseY, items, allowedOccupied = new Set()) {
+    for (const item of items) {
+        const x = baseX + item.dx;
+        const y = baseY + item.dy;
+        if (x < 0 || x >= board.Cols || y < 0 || y >= board.Rows) {
+            return `Tile at (${x}, ${y}) would be outside board bounds.`;
+        }
+        const occupied = board.coordToTile[x][y];
+        if (occupied && !allowedOccupied.has(tileKey(x, y))) {
+            return `Tile at (${x}, ${y}) is already occupied.`;
+        }
+    }
+    return null;
+}
+
+function placeTileAt(tileData, x, y) {
+    if (tileData.isConcrete) {
+        const t = new Tile(null, 0, x, y, [...tileData.glues], tileData.color, true);
+        t.name = tileData.name;
+        board.AddConc(t);
+    } else {
+        const p = new Polyomino(board.poly_id_c++, x, y, [...tileData.glues], tileData.color);
+        p.Tiles[0].name = tileData.name;
+        board.Add(p);
+    }
+}
+
+function removeTileAtCoord(x, y) {
+    const tile = board.coordToTile[x][y];
+    if (!tile) return;
+    
+    if (tile.isConcrete) {
+        const index = board.ConcreteTiles.indexOf(tile);
+        if (index > -1) {
+            board.ConcreteTiles.splice(index, 1);
+            board.coordToTile[x][y] = null;
+        }
+        return;
+    }
+    
+    const parent = tile.parent;
+    if (!parent) return;
+    
+    const tileIndex = parent.Tiles.indexOf(tile);
+    if (tileIndex > -1) {
+        parent.Tiles.splice(tileIndex, 1);
+        board.coordToTile[x][y] = null;
+    }
+    if (parent.Tiles.length === 0) {
+        const polyIndex = board.Polyominoes.indexOf(parent);
+        if (polyIndex > -1) {
+            board.Polyominoes.splice(polyIndex, 1);
+        }
+    }
+}
+
+function moveSelectionByOffset(offsetX, offsetY) {
+    if (offsetX === 0 && offsetY === 0) {
+        alert('Move offset cannot be (0, 0).');
+        return;
+    }
+    
+    const sourceCoords = Array.from(selectedTiles).map(parseTileKey);
+    const movingTiles = [];
+    for (const { x, y } of sourceCoords) {
+        const tile = board.coordToTile[x][y];
+        if (!tile) continue;
+        movingTiles.push({
+            sourceX: x,
+            sourceY: y,
+            dx: x - (selectionOrigin ? selectionOrigin.x : 0),
+            dy: y - (selectionOrigin ? selectionOrigin.y : 0),
+            color: tile.color,
+            glues: [...tile.glues],
+            name: tile.name || '',
+            isConcrete: tile.isConcrete === true
+        });
+    }
+    
+    if (movingTiles.length === 0) {
+        alert('Selected tiles are no longer available.');
+        clearSelection();
+        return;
+    }
+    
+    const sourceSet = new Set(sourceCoords.map(c => tileKey(c.x, c.y)));
+    const base = selectionOrigin || {
+        x: Math.min(...sourceCoords.map(c => c.x)),
+        y: Math.min(...sourceCoords.map(c => c.y))
+    };
+    
+    const movedTemplate = movingTiles.map(tile => ({
+        ...tile,
+        dx: tile.dx + offsetX,
+        dy: tile.dy + offsetY
+    }));
+    
+    const placementError = validatePlacement(base.x, base.y, movedTemplate, sourceSet);
+    if (placementError) {
+        alert(`Cannot move selection: ${placementError}`);
+        return;
+    }
+    
+    saveStateToHistory();
+    for (const tileData of movingTiles) {
+        removeTileAtCoord(tileData.sourceX, tileData.sourceY);
+    }
+    
+    const newSelection = new Set();
+    for (const tileData of movedTemplate) {
+        const x = base.x + tileData.dx;
+        const y = base.y + tileData.dy;
+        placeTileAt(tileData, x, y);
+        newSelection.add(tileKey(x, y));
+    }
+    
+    selectedTiles = newSelection;
+    selectionOrigin = { x: base.x + offsetX, y: base.y + offsetY };
+    setSelectionStatus(`Moved ${movingTiles.length} tile(s).`);
     drawBoard();
     updateInfo();
 }
@@ -650,6 +951,7 @@ function handleKeyPress(e) {
 function tumbleDirection(direction) {
     // Save current state before tumbling
     saveStateToHistory();
+    clearSelection(false);
     
     board.Tumble(direction);
     drawBoard();
@@ -737,6 +1039,7 @@ function undoAction() {
     // Restore glues state
     gluesActivated = state.gluesActivated;
     updateGlueButtonState();
+    clearSelection(false);
     
     drawBoard();
     updateInfo();
@@ -919,6 +1222,59 @@ function drawBoardImmediate() {
                 tilesDrawn++;
             }
         }
+    }
+
+    if (selectedTiles.size > 0) {
+        ctx.save();
+        ctx.lineWidth = Math.max(2 / zoom, 1 / zoom);
+        const hasPreviewOffset = selectionMoveOffset && (selectionMoveOffset.x !== 0 || selectionMoveOffset.y !== 0);
+        for (const key of selectedTiles) {
+            const { x, y } = parseTileKey(key);
+            if (x < 0 || x >= board.Cols || y < 0 || y >= board.Rows) continue;
+            if (!board.coordToTile[x][y]) continue;
+            let drawX = x;
+            let drawY = y;
+            let isInvalidPreview = false;
+            if (hasPreviewOffset) {
+                drawX = x + selectionMoveOffset.x;
+                drawY = y + selectionMoveOffset.y;
+                if (drawX < 0 || drawX >= board.Cols || drawY < 0 || drawY >= board.Rows) {
+                    isInvalidPreview = true;
+                } else {
+                    const occupied = board.coordToTile[drawX][drawY];
+                    if (occupied && !selectedTiles.has(tileKey(drawX, drawY))) {
+                        isInvalidPreview = true;
+                    }
+                }
+            }
+            if (drawX < 0 || drawX >= board.Cols || drawY < 0 || drawY >= board.Rows) continue;
+            ctx.strokeStyle = isInvalidPreview ? '#dc2626' : '#f59e0b';
+            ctx.fillStyle = isInvalidPreview ? 'rgba(220, 38, 38, 0.25)' : 'rgba(245, 158, 11, 0.25)';
+            const tileX = drawX * cellSize;
+            const tileY = drawY * cellSize;
+            ctx.fillRect(tileX + 1, tileY + 1, cellSize - 2, cellSize - 2);
+            ctx.strokeRect(tileX + 1, tileY + 1, cellSize - 2, cellSize - 2);
+        }
+        ctx.restore();
+    }
+
+    if (selectionDragStart && selectionDragCurrent) {
+        const minX = Math.min(selectionDragStart.x, selectionDragCurrent.x);
+        const minY = Math.min(selectionDragStart.y, selectionDragCurrent.y);
+        const maxX = Math.max(selectionDragStart.x, selectionDragCurrent.x);
+        const maxY = Math.max(selectionDragStart.y, selectionDragCurrent.y);
+        const rectX = minX * cellSize;
+        const rectY = minY * cellSize;
+        const rectW = (maxX - minX + 1) * cellSize;
+        const rectH = (maxY - minY + 1) * cellSize;
+        ctx.save();
+        ctx.setLineDash([8 / zoom, 5 / zoom]);
+        ctx.strokeStyle = '#2563eb';
+        ctx.lineWidth = 2 / zoom;
+        ctx.fillStyle = 'rgba(37, 99, 235, 0.1)';
+        ctx.fillRect(rectX, rectY, rectW, rectH);
+        ctx.strokeRect(rectX, rectY, rectW, rectH);
+        ctx.restore();
     }
     
     // Restore context state
@@ -1116,6 +1472,7 @@ function parseXML(xmlText) {
         
         // Clear current board
         board.clear();
+        clearSelection(false);
         
         // Get board size (supports both TileConfiguration and legacy static format)
         const boardSizeElem = xmlDoc.getElementsByTagName('BoardSize')[0];

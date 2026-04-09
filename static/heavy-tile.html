@@ -234,10 +234,22 @@
                     </div>
                 </details>
 
-                <!-- Zoom Tab -->
+                <!-- Tools Tab -->
                 <details class="collapsible-section">
-                    <summary>Zoom & Navigation</summary>
+                    <summary>Tools</summary>
                     <div class="section-content">
+                        <h3 style="font-size: 1.1em;">Selection</h3>
+                        <button id="toggle-select-mode" class="mode-btn">Enable Select Mode</button>
+                        <button id="copy-selection">Copy Selection</button>
+                        <button id="clear-selection">Deselect</button>
+                        <p id="selection-status" style="margin-top: 8px; font-size: 12px; color: #666;">
+                            Selection mode is off.
+                        </p>
+                        <p style="margin-top: 4px; font-size: 12px; color: #666;">
+                            • Drag to select tiles, then drag selected tiles to move
+                        </p>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">View</h3>
                         <button id="zoom-in">+ Zoom In</button>
                         <button id="zoom-out">- Zoom Out</button>
                         <button id="zoom-reset">Reset View</button>
