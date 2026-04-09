@@ -1042,6 +1042,39 @@ function loadFileHandler() {
     reader.readAsText(file);
 }
 
+function normalizeXmlColor(colorValue, fallback = '#3498db') {
+    const rawColor = (colorValue ?? '').toString().trim();
+    if (!rawColor) return fallback;
+    
+    const withoutHash = rawColor.startsWith('#') ? rawColor.slice(1) : rawColor;
+    const normalized = withoutHash.length === 3
+        ? withoutHash.split('').map(c => c + c).join('')
+        : withoutHash;
+    
+    return /^[0-9a-fA-F]{6}$/.test(normalized) ? `#${normalized}` : fallback;
+}
+
+function colorToXmlText(colorValue) {
+    return normalizeXmlColor(colorValue).slice(1).toUpperCase();
+}
+
+function parseGlueValue(glueValue) {
+    const value = (glueValue ?? '').toString().trim();
+    if (!value || value === 'None' || value === '0') {
+        return ' ';
+    }
+    return value;
+}
+
+function escapeXml(value) {
+    return String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&apos;');
+}
+
 function parseXML(xmlText) {
     try {
         // Convert to string if needed
@@ -1084,75 +1117,85 @@ function parseXML(xmlText) {
         // Clear current board
         board.clear();
         
-        // Get board size (TileConfiguration format)
+        // Get board size (supports both TileConfiguration and legacy static format)
         const boardSizeElem = xmlDoc.getElementsByTagName('BoardSize')[0];
-        if (boardSizeElem) {
-            const width = parseInt(boardSizeElem.getAttribute('width'));
-            const height = parseInt(boardSizeElem.getAttribute('height'));
+        const legacyBoardElem = xmlDoc.getElementsByTagName('board')[0];
+        if (boardSizeElem || legacyBoardElem) {
+            const sourceElem = boardSizeElem || legacyBoardElem;
+            const width = parseInt(sourceElem.getAttribute('width'));
+            const height = parseInt(sourceElem.getAttribute('height'));
             board.resizeBoard(width, height);
             document.getElementById('board-width').value = width;
             document.getElementById('board-height').value = height;
             resizeCanvas();
         }
         
-        // Parse tiles (TileConfiguration format)
+        // Parse tiles (supports both TileConfiguration and legacy static format)
         const tileData = xmlDoc.getElementsByTagName('TileData')[0];
-        if (tileData) {
-            const tiles = tileData.getElementsByTagName('Tile');
-            for (let tileElem of tiles) {
-                // Get location
+        const legacyTilesContainer = xmlDoc.getElementsByTagName('tiles')[0];
+        const usesTileConfigurationFormat = !!tileData;
+        const tileElements = usesTileConfigurationFormat
+            ? Array.from(tileData.getElementsByTagName('Tile'))
+            : (legacyTilesContainer ? Array.from(legacyTilesContainer.getElementsByTagName('tile')) : []);
+        
+        for (let tileElem of tileElements) {
+            let x;
+            let y;
+            let color = '#3498db';
+            let glues = [' ', ' ', ' ', ' '];
+            let isConcrete = false;
+            let name = '';
+            
+            if (usesTileConfigurationFormat) {
                 const locationElem = tileElem.getElementsByTagName('Location')[0];
                 if (!locationElem) continue;
                 
-                const x = parseInt(locationElem.getAttribute('x'));
-                const y = parseInt(locationElem.getAttribute('y'));
+                x = parseInt(locationElem.getAttribute('x'));
+                y = parseInt(locationElem.getAttribute('y'));
                 
-                // Get color
                 const colorElem = tileElem.getElementsByTagName('Color')[0];
-                let color = colorElem ? '#' + colorElem.textContent : '#3498db';
+                color = normalizeXmlColor(colorElem ? colorElem.textContent : '', '#3498db');
                 
-                // Get glues
-                const northGlueElem = tileElem.getElementsByTagName('NorthGlue')[0];
-                const eastGlueElem = tileElem.getElementsByTagName('EastGlue')[0];
-                const southGlueElem = tileElem.getElementsByTagName('SouthGlue')[0];
-                const westGlueElem = tileElem.getElementsByTagName('WestGlue')[0];
+                glues[0] = parseGlueValue(tileElem.getElementsByTagName('NorthGlue')[0]?.textContent);
+                glues[1] = parseGlueValue(tileElem.getElementsByTagName('EastGlue')[0]?.textContent);
+                glues[2] = parseGlueValue(tileElem.getElementsByTagName('SouthGlue')[0]?.textContent);
+                glues[3] = parseGlueValue(tileElem.getElementsByTagName('WestGlue')[0]?.textContent);
                 
-                let glues = [' ', ' ', ' ', ' '];
-                if (northGlueElem) {
-                    const ng = northGlueElem.textContent;
-                    glues[0] = (ng === 'None' || ng === '0') ? ' ' : ng;
-                }
-                if (eastGlueElem) {
-                    const eg = eastGlueElem.textContent;
-                    glues[1] = (eg === 'None' || eg === '0') ? ' ' : eg;
-                }
-                if (southGlueElem) {
-                    const sg = southGlueElem.textContent;
-                    glues[2] = (sg === 'None' || sg === '0') ? ' ' : sg;
-                }
-                if (westGlueElem) {
-                    const wg = westGlueElem.textContent;
-                    glues[3] = (wg === 'None' || wg === '0') ? ' ' : wg;
-                }
-                
-                // Get concrete status
                 const concreteElem = tileElem.getElementsByTagName('Concrete')[0];
-                const isConcrete = concreteElem && concreteElem.textContent === 'True';
+                isConcrete = (concreteElem?.textContent ?? '').trim().toLowerCase() === 'true';
                 
-                // Get label
                 const labelElem = tileElem.getElementsByTagName('Label')[0];
-                const name = labelElem ? labelElem.textContent : '';
+                name = labelElem ? labelElem.textContent : '';
+            } else {
+                x = parseInt(tileElem.getAttribute('x'));
+                y = parseInt(tileElem.getAttribute('y'));
+                color = normalizeXmlColor(tileElem.getAttribute('color'), '#3498db');
+                isConcrete = (tileElem.getAttribute('concrete') ?? '').trim().toLowerCase() === 'true';
+                name = tileElem.getAttribute('name') || '';
                 
-                // Add tile to board
-                if (isConcrete) {
-                    const t = new Tile(null, 0, x, y, glues, color, true);
-                    t.name = name;
-                    board.AddConc(t);
-                } else {
-                    const p = new Polyomino(board.poly_id_c++, x, y, glues, color);
-                    p.Tiles[0].name = name;
-                    board.Add(p);
+                const glueElements = tileElem.getElementsByTagName('glue');
+                for (let glueElem of glueElements) {
+                    const direction = (glueElem.getAttribute('direction') || '').toUpperCase();
+                    const label = parseGlueValue(glueElem.getAttribute('label'));
+                    if (direction === 'N') glues[0] = label;
+                    if (direction === 'E') glues[1] = label;
+                    if (direction === 'S') glues[2] = label;
+                    if (direction === 'W') glues[3] = label;
                 }
+            }
+            
+            if (Number.isNaN(x) || Number.isNaN(y)) {
+                continue;
+            }
+            
+            if (isConcrete) {
+                const t = new Tile(null, 0, x, y, glues, color, true);
+                t.name = name;
+                board.AddConc(t);
+            } else {
+                const p = new Polyomino(board.poly_id_c++, x, y, glues, color);
+                p.Tiles[0].name = name;
+                board.Add(p);
             }
         }
         
@@ -1225,63 +1268,38 @@ function parseXML(xmlText) {
 
 function saveFileHandler() {
     let xmlText = '<?xml version="1.0" encoding="UTF-8"?>\n';
-    xmlText += `<configuration>\n`;
-    xmlText += `  <board width="${board.Cols}" height="${board.Rows}"/>\n`;
-    xmlText += `  <tiles>\n`;
+    xmlText += `<TileConfiguration>\n`;
+    xmlText += `  <BoardSize height="${board.Rows}" width="${board.Cols}" />\n`;
+    xmlText += `  <TileData>\n`;
     
-    // Save regular tiles
+    const appendTileXml = (tile, concreteValue) => {
+        const tileName = tile.name || '';
+        const glues = (tile.glues && tile.glues.length === 4) ? tile.glues : [' ', ' ', ' ', ' '];
+        
+        xmlText += `    <Tile>\n`;
+        xmlText += `      <Location x="${tile.x}" y="${tile.y}" />\n`;
+        xmlText += `      <Color>${colorToXmlText(tile.color)}</Color>\n`;
+        xmlText += `      <NorthGlue>${glues[0] && glues[0] !== ' ' ? escapeXml(glues[0]) : 'None'}</NorthGlue>\n`;
+        xmlText += `      <SouthGlue>${glues[2] && glues[2] !== ' ' ? escapeXml(glues[2]) : 'None'}</SouthGlue>\n`;
+        xmlText += `      <EastGlue>${glues[1] && glues[1] !== ' ' ? escapeXml(glues[1]) : 'None'}</EastGlue>\n`;
+        xmlText += `      <WestGlue>${glues[3] && glues[3] !== ' ' ? escapeXml(glues[3]) : 'None'}</WestGlue>\n`;
+        xmlText += `      <Concrete>${concreteValue ? 'True' : 'False'}</Concrete>\n`;
+        xmlText += `      <Label>${escapeXml(tileName)}</Label>\n`;
+        xmlText += `    </Tile>\n`;
+    };
+    
     for (let p of board.Polyominoes) {
         for (let tile of p.Tiles) {
-            xmlText += `    <tile x="${tile.x}" y="${tile.y}" color="${tile.color}"`;
-            if (tile.name) xmlText += ` name="${tile.name}"`;
-            xmlText += `>\n`;
-            
-            if (tile.glues && tile.glues.length === 4) {
-                if (tile.glues[0] && tile.glues[0] !== ' ') {
-                    xmlText += `      <glue direction="N" label="${tile.glues[0]}"/>\n`;
-                }
-                if (tile.glues[1] && tile.glues[1] !== ' ') {
-                    xmlText += `      <glue direction="E" label="${tile.glues[1]}"/>\n`;
-                }
-                if (tile.glues[2] && tile.glues[2] !== ' ') {
-                    xmlText += `      <glue direction="S" label="${tile.glues[2]}"/>\n`;
-                }
-                if (tile.glues[3] && tile.glues[3] !== ' ') {
-                    xmlText += `      <glue direction="W" label="${tile.glues[3]}"/>\n`;
-                }
-            }
-            
-            xmlText += `    </tile>\n`;
+            appendTileXml(tile, false);
         }
     }
     
-    // Save concrete tiles
     for (let conc of board.ConcreteTiles) {
-        xmlText += `    <tile x="${conc.x}" y="${conc.y}" color="${conc.color}" concrete="true"`;
-        if (conc.name) xmlText += ` name="${conc.name}"`;
-        xmlText += `>\n`;
-        
-        // Save glues for concrete tiles
-        if (conc.glues && conc.glues.length === 4) {
-            if (conc.glues[0] && conc.glues[0] !== ' ') {
-                xmlText += `      <glue direction="N" label="${conc.glues[0]}"/>\n`;
-            }
-            if (conc.glues[1] && conc.glues[1] !== ' ') {
-                xmlText += `      <glue direction="E" label="${conc.glues[1]}"/>\n`;
-            }
-            if (conc.glues[2] && conc.glues[2] !== ' ') {
-                xmlText += `      <glue direction="S" label="${conc.glues[2]}"/>\n`;
-            }
-            if (conc.glues[3] && conc.glues[3] !== ' ') {
-                xmlText += `      <glue direction="W" label="${conc.glues[3]}"/>\n`;
-            }
-        }
-        
-        xmlText += `    </tile>\n`;
+        appendTileXml(conc, true);
     }
     
-    xmlText += `  </tiles>\n`;
-    xmlText += `</configuration>`;
+    xmlText += `  </TileData>\n`;
+    xmlText += `</TileConfiguration>`;
     
     // Download file
     const blob = new Blob([xmlText], { type: 'text/xml' });
