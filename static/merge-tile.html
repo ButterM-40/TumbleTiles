@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TumbleTiles - Merge Tile Mode</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <button id="open-settings" class="settings-btn" style="display: none;">Settings</button>
+        <div class="main-content">
+            <!-- Left Panel - Controls -->
+            <div class="control-panel" id="control-panel">
+                <button id="close-settings" class="close-btn">&times;</button>
+                <!-- File Tab -->
+                <details class="collapsible-section">
+                    <summary>File</summary>
+                    <div class="section-content">
+                        <input type="file" id="file-input" accept=".xml" style="display: none;">
+                        <button id="load-file">Load XML File</button>
+                        <button id="save-file">Save XML</button>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">Load Examples</h3>
+                        <div class="form-group">
+                            <label for="example-select">Select Example:</label>
+                            <select id="example-select">
+                                <option value="">-- Select Example --</option>
+                                <option value="Cat.xml">Cat</option>
+                                <option value="Cat2.xml">Cat 2</option>
+                                <option value="Shuriken.xml">Shuriken</option>
+                                <option value="Reconfiguration.xml">Reconfiguration</option>
+                                <option value="ReconfigurationEmpty.xml">Reconfiguration Empty</option>
+                                <option value="Relocation.xml">Relocation</option>
+                                <option value="RelocationEmpty.xml">Relocation Empty</option>
+                                <option value="x-monotonc repcator.xml">X-Monotonic Replicator</option>
+                            </select>
+                        </div>
+                        <button id="load-example">Load Example</button>
+
+                        <div class="form-group" style="margin-top: 15px;">
+                            <label>
+                                <input type="checkbox" id="activate-on-load">
+                                Activate glues on load
+                            </label>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Board Tab -->
+                <details class="collapsible-section">
+                    <summary>Board Settings</summary>
+                    <div class="section-content">
+                        <div class="form-group">
+                            <label for="board-width">Width:</label>
+                            <input type="number" id="board-width" value="15" min="5" max="200">
+                        </div>
+                        <div class="form-group">
+                            <label for="board-height">Height:</label>
+                            <input type="number" id="board-height" value="15" min="5" max="200">
+                        </div>
+                        <button id="resize-board">Resize Board</button>
+                        <button id="clear-board">Clear Board</button>
+
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="show-labels" checked>
+                                Show tile labels
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="show-glues" checked>
+                                Show glues
+                            </label>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="performance-mode">
+                                Performance Mode
+                            </label>
+                        </div>
+                        <p style="font-size: 11px; color: #666; margin-top: 5px;">
+                            Auto-enabled for 1000+ tiles. Disables labels, glues, and grid for faster rendering.
+                            Uncheck to see details (may be slower).
+                        </p>
+                    </div>
+                </details>
+
+                <!-- Movements Tab -->
+                <details class="collapsible-section">
+                    <summary>Movements</summary>
+                    <div class="section-content">
+                        <h3 style="margin-top: 10px; font-size: 1.1em;">Movement Controls</h3>
+                        <div class="direction-grid">
+                            <button class="dir-btn" data-dir="N">↑</button>
+                            <button class="dir-btn" data-dir="W">←</button>
+                            <button class="dir-btn" data-dir="E">→</button>
+                            <button class="dir-btn" data-dir="S">↓</button>
+                        </div>
+                        <button id="activate-glues">Activate Glues</button>
+                        <button id="undo-action" style="margin-top: 10px;">↶ Undo (Ctrl+Z)</button>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">Script Execution</h3>
+                        <div class="form-group">
+                            <label for="script-preset">Load Preset:</label>
+                            <select id="script-preset">
+                                <option value="">-- Select Preset --</option>
+                                <option value="NNESSW">Pattern 1: NNESSW</option>
+                                <option value="NESW">Pattern 2: NESW</option>
+                                <option value="NWSE">Pattern 3: NWSE</option>
+                                <option value="NNNN">North x4: NNNN</option>
+                                <option value="EEEE">East x4: EEEE</option>
+                                <option value="SSSS">South x4: SSSS</option>
+                                <option value="WWWW">West x4: WWWW</option>
+                                <option value="NESWNWSE">Clockwise: NESWNWSE</option>
+                                <option value="NWNESWSE">Alternating: NWNESWSE</option>
+                            </select>
+                        </div>
+                        <textarea id="script-input" placeholder="Enter sequence: NESW&#10;Example: NNESSW" rows="3"></textarea>
+                        <div class="form-group">
+                            <label for="script-delay">Delay (ms):</label>
+                            <input type="number" id="script-delay" value="500" min="0" max="5000" step="100">
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="script-loop">
+                                Loop Sequence
+                            </label>
+                        </div>
+                        <button id="run-script">Run Script</button>
+                        <button id="stop-script">Stop Script</button>
+                    </div>
+                </details>
+
+                <!-- Factory Mode Tab -->
+                <details class="collapsible-section">
+                    <summary>Factory Mode</summary>
+                    <div class="section-content">
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="factory-mode">
+                                Enable Factory Mode
+                            </label>
+                        </div>
+                        <p style="font-size: 12px; color: #666; margin-top: 10px;">
+                            When enabled, tiles that hit the borders will be removed from the board.
+                        </p>
+                    </div>
+                </details>
+
+                <!-- Tile Tab -->
+                <details class="collapsible-section">
+                    <summary>Tile</summary>
+                    <div class="section-content">
+                        <h3 style="margin-top: 10px; font-size: 1.1em;">Tile Palette</h3>
+                        <div class="tile-palette" id="tile-palette">
+                            <!-- Tile palette items will be added here dynamically -->
+                        </div>
+                        <div id="palette-actions" style="margin-top: 10px; display: none;">
+                            <button id="modify-tile-type" style="font-size: 12px; padding: 5px 10px; background: #10b981;">Modify Selected</button>
+                            <button id="delete-tile-type" style="font-size: 12px; padding: 5px 10px; background: #ef4444;">Delete Selected</button>
+                            <div style="margin-top: 8px;">
+                                <label style="font-size: 12px;">
+                                    <input type="checkbox" id="update-board-tiles">
+                                    Update all board tiles with same name
+                                </label>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <button id="save-tile-type" style="font-size: 12px; padding: 5px 10px;">Save Current as Tile Type</button>
+                            <button id="save-palette" style="font-size: 12px; padding: 5px 10px; margin-top: 5px;">Export Palette</button>
+                            <input type="file" id="palette-input" accept=".json" style="display: none;">
+                            <button id="load-palette" style="font-size: 12px; padding: 5px 10px; margin-top: 5px;">Import Palette</button>
+                        </div>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">Current Tile Settings</h3>
+                        <div class="form-group">
+                            <label for="tile-color">Color:</label>
+                            <input type="color" id="tile-color" value="#3498db">
+                        </div>
+                        <div class="form-group">
+                            <label for="tile-name">Name (optional):</label>
+                            <input type="text" id="tile-name" placeholder="Tile name">
+                        </div>
+                        <div class="glues-group">
+                            <label>Glues (use commas for multiple):</label>
+                            <div class="glue-inputs">
+                                <div class="glue-input-row">
+                                    <label class="glue-label">North:</label>
+                                    <input type="text" id="glue-n" placeholder="e.g., A or A,B,C">
+                                </div>
+                                <div class="glue-input-row">
+                                    <label class="glue-label">East:</label>
+                                    <input type="text" id="glue-e" placeholder="e.g., A or A,B,C">
+                                </div>
+                                <div class="glue-input-row">
+                                    <label class="glue-label">South:</label>
+                                    <input type="text" id="glue-s" placeholder="e.g., A or A,B,C">
+                                </div>
+                                <div class="glue-input-row">
+                                    <label class="glue-label">West:</label>
+                                    <input type="text" id="glue-w" placeholder="e.g., A or A,B,C">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="tile-concrete">
+                                Concrete Tile
+                            </label>
+                        </div>
+                        <button id="add-tile">Add Tile</button>
+                        <button id="toggle-click-mode">Enable Click-to-Add</button>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">Quick Actions</h3>
+                        <button id="toggle-add-mode" class="mode-btn">Add Mode (Ctrl+A)</button>
+                        <button id="toggle-delete-mode" class="mode-btn">Delete Mode (Ctrl+D)</button>
+                        <p style="font-size: 12px; color: #666; margin-top: 10px;">
+                            • Hold Ctrl+A and click/drag to add tiles<br>
+                            • Hold Ctrl+D and click/drag to delete tiles<br>
+                            • Or use buttons to toggle modes
+                        </p>
+                    </div>
+                </details>
+
+                <!-- Tools Tab -->
+                <details class="collapsible-section">
+                    <summary>Tools</summary>
+                    <div class="section-content">
+                        <h3 style="font-size: 1.1em;">Selection</h3>
+                        <button id="toggle-select-mode" class="mode-btn">Enable Select Mode</button>
+                        <button id="copy-selection">Copy Selection</button>
+                        <button id="clear-selection">Deselect</button>
+                        <p id="selection-status" style="margin-top: 8px; font-size: 12px; color: #666;">
+                            Selection mode is off.
+                        </p>
+                        <p style="margin-top: 4px; font-size: 12px; color: #666;">
+                            • Drag to select tiles, then drag selected tiles to move
+                        </p>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">View</h3>
+                        <button id="zoom-in">+ Zoom In</button>
+                        <button id="zoom-out">- Zoom Out</button>
+                        <button id="zoom-reset">Reset View</button>
+                        <button id="center-board">Center Board</button>
+                        <p style="margin-top: 10px; font-size: 12px; color: #666;">
+                            • Scroll wheel to zoom<br>
+                            • Click and drag to pan
+                        </p>
+
+                        <h3 style="margin-top: 20px; font-size: 1.1em;">Info</h3>
+                        <div id="info-display">
+                            <p>Tiles: <span id="tile-count">0</span></p>
+                            <p>Polyominoes: <span id="poly-count">0</span></p>
+                        </div>
+                    </div>
+                </details>
+
+                <!-- Information Tab -->
+                <details class="collapsible-section">
+                    <summary>Information</summary>
+                    <div class="section-content">
+                        <h3 style="font-size: 1.1em; margin-bottom: 10px;">Merge Tiles</h3>
+                        <p style="font-size: 12px; color: #444; margin-bottom: 15px;">
+                            After each move, adjacent tiles that share the same <strong>name</strong>
+                            collapse into one. Only named tiles merge; concrete tiles are never consumed.
+                        </p>
+
+                        <h3 style="font-size: 1.1em; margin-bottom: 15px;">Research Group</h3>
+                        <p style="margin-bottom: 10px;">
+                            <a href="https://asarg.hackresearch.com/main/" target="_blank" style="color: #667eea; text-decoration: none; font-weight: 600;">
+                                Visit Research Homepage →
+                            </a>
+                        </p>
+
+                        <h3 style="font-size: 1.1em; margin-top: 20px; margin-bottom: 15px;">Contact</h3>
+                        <p style="margin-bottom: 10px;">
+                            <a href="mailto:robert.schweller@utrgv.edu" style="color: #667eea; text-decoration: none;">
+                                robert.schweller@utrgv.edu
+                            </a>
+                        </p>
+
+                        <h3 style="font-size: 1.1em; margin-top: 20px; margin-bottom: 15px;">GitHub</h3>
+                        <p style="margin-bottom: 10px;">
+                            <a href="https://github.com/asarg/TumbleTiles" target="_blank" style="color: #667eea; text-decoration: none; font-weight: 600;">
+                                github.com/asarg/TumbleTiles →
+                            </a>
+                        </p>
+                    </div>
+                </details>
+            </div>
+
+            <!-- Right Panel - Canvas -->
+            <div class="canvas-panel">
+                <canvas id="board-canvas"></canvas>
+                <div id="canvas-status"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="tumbletiles.js"></script>
+    <script src="app.js"></script>
+    <script src="merge-tile.js"></script>
+</body>
+</html>
