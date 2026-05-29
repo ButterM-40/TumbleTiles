@@ -2,8 +2,7 @@
 
 let board;
 let canvas, ctx;
-let cellSize = 30;
-let clickToAddMode = false;
+let cellSize = 40;
 let scriptRunning = false;
 let scriptInterval = null;
 let showLabels = true;
@@ -23,6 +22,9 @@ let selectedPaletteIndex = -1;
 let zoom = 1.0;
 let panX = 0;
 let panY = 0;
+// Allow zooming far enough out to see a full 1000x1000 board at once.
+const MIN_ZOOM = 0.01;
+const MAX_ZOOM = 5.0;
 let isDragging = false;
 let lastMouseX = 0;
 let lastMouseY = 0;
@@ -31,6 +33,7 @@ let selectionDragStart = null;
 let selectionDragCurrent = null;
 let selectedTiles = new Set();
 let copiedSelection = [];
+let lastHoverGrid = null;
 let selectionOrigin = null;
 let selectionMoveStart = null;
 let selectionMoveOffset = null;
@@ -43,7 +46,7 @@ const RENDER_THROTTLE = 16; // ~60fps
 let mouseMoveTimeout = null;
 let offscreenCanvas = null;
 let offscreenCtx = null;
-const baseCellSize = 30;
+const baseCellSize = 40;
 let useColorBatching = false;
 
 // Initialize the application
@@ -58,12 +61,12 @@ function init() {
     
     // Set canvas size
     resizeCanvas();
-    
-    // Draw initial board
-    drawBoard();
-    
+
     // Setup event listeners
     setupEventListeners();
+
+    // Draw initial board, centered in the viewport
+    centerBoardHandler();
     
     // Initialize tile palette
     renderTilePalette();
@@ -72,9 +75,20 @@ function init() {
     updateInfo();
 }
 
+// The canvas is a fixed-size viewport (it fills the canvas panel) rather than
+// being sized to the whole board. The board is drawn into it via pan/zoom with
+// viewport culling, so an arbitrarily large board (e.g. 1000x1000) never needs
+// an impossibly large canvas.
 function resizeCanvas() {
-    canvas.width = board.Cols * cellSize;
-    canvas.height = board.Rows * cellSize;
+    const panel = document.querySelector('.canvas-panel');
+    const statusEl = document.getElementById('canvas-status');
+    // Reserve space for panel padding (10px), canvas border (3px) and the
+    // status bar shown beneath the canvas.
+    const statusReserve = (statusEl ? statusEl.offsetHeight : 20) + 30;
+    const width = Math.floor(panel.clientWidth - 26);
+    const height = Math.floor(panel.clientHeight - 26 - statusReserve);
+    canvas.width = Math.max(320, width);
+    canvas.height = Math.max(320, height);
 }
 
 function setupEventListeners() {
@@ -83,12 +97,21 @@ function setupEventListeners() {
         document.getElementById('control-panel').classList.add('hidden');
         document.querySelector('.main-content').classList.add('controls-hidden');
         document.getElementById('open-settings').style.display = 'block';
+        // The panel width animates over 0.3s; re-measure once it settles.
+        setTimeout(() => { resizeCanvas(); drawBoard(); }, 320);
     });
-    
+
     document.getElementById('open-settings').addEventListener('click', () => {
         document.getElementById('control-panel').classList.remove('hidden');
         document.querySelector('.main-content').classList.remove('controls-hidden');
         document.getElementById('open-settings').style.display = 'none';
+        setTimeout(() => { resizeCanvas(); drawBoard(); }, 320);
+    });
+
+    // Keep the canvas viewport in sync with the window size.
+    window.addEventListener('resize', () => {
+        resizeCanvas();
+        drawBoard();
     });
     
     // Board controls
@@ -115,8 +138,6 @@ function setupEventListeners() {
     });
     
     // Tile controls
-    document.getElementById('add-tile').addEventListener('click', addTileHandler);
-    document.getElementById('toggle-click-mode').addEventListener('click', toggleClickMode);
     document.getElementById('toggle-add-mode').addEventListener('click', toggleAddMode);
     document.getElementById('toggle-delete-mode').addEventListener('click', toggleDeleteMode);
     
@@ -139,6 +160,17 @@ function setupEventListeners() {
             if (e.key === 'z' || e.key === 'Z') {
                 e.preventDefault();
                 undoAction();
+            }
+            // Ctrl+C / Ctrl+V to copy and paste the selection
+            // (ignored while typing in a text field so normal copy/paste still works)
+            const typingInField = e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA';
+            if ((e.key === 'c' || e.key === 'C') && !typingInField) {
+                e.preventDefault();
+                copySelectionHandler();
+            }
+            if ((e.key === 'v' || e.key === 'V') && !typingInField) {
+                e.preventDefault();
+                pasteSelectionHandler();
             }
         }
     });
@@ -244,15 +276,16 @@ function setupEventListeners() {
         console.log('Load XML button clicked, opening file dialog');
     });
     document.getElementById('save-file').addEventListener('click', saveFileHandler);
+    document.getElementById('export-board').addEventListener('click', exportBoardHandler);
     document.getElementById('load-example').addEventListener('click', loadExampleHandler);
     
     // Zoom controls
     document.getElementById('zoom-in').addEventListener('click', () => {
-        zoom = Math.min(zoom * 1.2, 5.0);
+        zoom = Math.min(zoom * 1.2, MAX_ZOOM);
         drawBoard();
     });
     document.getElementById('zoom-out').addEventListener('click', () => {
-        zoom = Math.max(zoom / 1.2, 0.2);
+        zoom = Math.max(zoom / 1.2, MIN_ZOOM);
         drawBoard();
     });
     document.getElementById('zoom-reset').addEventListener('click', () => {
@@ -265,6 +298,7 @@ function setupEventListeners() {
     document.getElementById('center-board').addEventListener('click', centerBoardHandler);
     document.getElementById('toggle-select-mode').addEventListener('click', toggleSelectMode);
     document.getElementById('copy-selection').addEventListener('click', copySelectionHandler);
+    document.getElementById('paste-selection').addEventListener('click', pasteSelectionHandler);
     document.getElementById('clear-selection').addEventListener('click', clearSelectionHandler);
     
     // Tile Palette buttons
@@ -292,8 +326,8 @@ function resizeBoardHandler() {
     const width = parseInt(document.getElementById('board-width').value);
     const height = parseInt(document.getElementById('board-height').value);
     
-    if (width < 5 || width > 200 || height < 5 || height > 200) {
-        alert('Board dimensions must be between 5 and 200');
+    if (width < 5 || width > 1000 || height < 5 || height > 1000) {
+        alert('Board dimensions must be between 5 and 1000');
         return;
     }
     
@@ -344,13 +378,9 @@ function resizeBoardHandler() {
     }
     
     resizeCanvas();
-    
-    // Reset zoom and pan to center
-    zoom = 1.0;
-    panX = 0;
-    panY = 0;
-    
-    drawBoard();
+
+    // Fit and center the (possibly very large) board in the viewport.
+    centerBoardHandler();
     updateInfo();
 }
 
@@ -364,51 +394,28 @@ function clearBoardHandler() {
 }
 
 function centerBoardHandler() {
-    // Calculate zoom to fit board in view with some padding
-    const canvasContainer = document.querySelector('.canvas-panel');
-    const containerWidth = canvasContainer.clientWidth - 40; // padding
-    const containerHeight = canvasContainer.clientHeight - 40;
-    
     const boardWidth = board.Cols * cellSize;
     const boardHeight = board.Rows * cellSize;
-    
-    const zoomX = containerWidth / boardWidth;
-    const zoomY = containerHeight / boardHeight;
-    
-    // Use the smaller zoom to fit entire board
-    zoom = Math.min(zoomX, zoomY, 1.0) * 0.9; // Don't zoom in beyond 1.0, add 10% padding
-    
+
+    // Fit the whole board in the canvas viewport with ~10% padding, never
+    // zooming in past 1.0 and never below MIN_ZOOM.
+    const zoomX = canvas.width / boardWidth;
+    const zoomY = canvas.height / boardHeight;
+    zoom = Math.max(MIN_ZOOM, Math.min(zoomX, zoomY, 1.0) * 0.9);
+
     // Center the board in the viewport
     panX = (canvas.width - boardWidth * zoom) / 2;
     panY = (canvas.height - boardHeight * zoom) / 2;
-    
+
     drawBoard();
-}
-
-function addTileHandler() {
-    alert('To add tiles, click directly on the canvas or use Ctrl+A for quick add mode');
-}
-
-function toggleClickMode() {
-    clickToAddMode = !clickToAddMode;
-    const btn = document.getElementById('toggle-click-mode');
-    btn.textContent = clickToAddMode ? 'Disable Click-to-Add' : 'Enable Click-to-Add';
-    btn.classList.toggle('active');
-    
-    const status = document.getElementById('canvas-status');
-    status.textContent = clickToAddMode ? 'Click on canvas to add tiles' : '';
 }
 
 function toggleAddMode() {
     quickAddMode = !quickAddMode;
     if (quickAddMode) {
         quickDeleteMode = false; // Disable delete mode
-        clickToAddMode = false; // Disable regular click-to-add
         selectMode = false;
         clearSelection(false);
-        const btn = document.getElementById('toggle-click-mode');
-        btn.textContent = 'Enable Click-to-Add';
-        btn.classList.remove('active');
     }
     updateModeButtons();
 }
@@ -417,12 +424,8 @@ function toggleDeleteMode() {
     quickDeleteMode = !quickDeleteMode;
     if (quickDeleteMode) {
         quickAddMode = false; // Disable add mode
-        clickToAddMode = false; // Disable regular click-to-add
         selectMode = false;
         clearSelection(false);
-        const btn = document.getElementById('toggle-click-mode');
-        btn.textContent = 'Enable Click-to-Add';
-        btn.classList.remove('active');
     }
     updateModeButtons();
 }
@@ -479,8 +482,8 @@ function canvasMouseDown(e) {
         return;
     }
 
-    // Don't pan in click-to-add mode or quick modes
-    if (clickToAddMode || quickAddMode || quickDeleteMode) {
+    // Don't pan in quick add/delete modes
+    if (quickAddMode || quickDeleteMode) {
         if (quickAddMode) {
             addTileAtMouse(e);
         } else if (quickDeleteMode) {
@@ -496,6 +499,9 @@ function canvasMouseDown(e) {
 }
 
 function canvasMouseMove(e) {
+    // Track the last hovered grid cell so paste can place tiles under the cursor
+    lastHoverGrid = getGridCoordinatesFromEvent(e, true);
+
     if (selectMode && selectionMoveStart && (e.buttons & 1) === 1) {
         const current = getGridCoordinatesFromEvent(e, true);
         if (!current) return;
@@ -573,14 +579,14 @@ function canvasMouseUp(e) {
     }
 
     isDragging = false;
-    canvas.style.cursor = clickToAddMode ? 'crosshair' : 'grab';
+    canvas.style.cursor = 'grab';
 }
 
 function canvasWheel(e) {
     e.preventDefault();
     
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.max(0.2, Math.min(5.0, zoom * delta));
+    const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom * delta));
     
     // Zoom towards mouse position
     const rect = canvas.getBoundingClientRect();
@@ -603,18 +609,12 @@ function canvasClickHandler(e) {
         addTileAtMouse(e);
         return;
     }
-    
+
     // Handle quick delete mode
     if (quickDeleteMode) {
         deleteTileAtMouse(e);
         return;
     }
-    
-    // Regular click-to-add mode
-    if (!clickToAddMode) return;
-    if (isDragging) return; // Don't add tile if we were dragging
-    
-    addTileAtMouse(e);
 }
 
 function addTileAtMouse(e) {
@@ -722,10 +722,6 @@ function toggleSelectMode() {
     if (selectMode) {
         quickAddMode = false;
         quickDeleteMode = false;
-        clickToAddMode = false;
-        const clickModeBtn = document.getElementById('toggle-click-mode');
-        clickModeBtn.textContent = 'Enable Click-to-Add';
-        clickModeBtn.classList.remove('active');
         setSelectionStatus('Select mode enabled. Drag to select; drag selected tiles to move.');
     } else {
         selectionDragStart = null;
@@ -789,6 +785,39 @@ function copySelectionHandler() {
     
     selectionOrigin = { x: minX, y: minY };
     setSelectionStatus(`Copied ${copiedSelection.length} tile(s).`);
+}
+
+function pasteSelectionHandler() {
+    if (copiedSelection.length === 0) {
+        alert('Nothing to paste. Copy a selection first (Ctrl+C).');
+        return;
+    }
+
+    // Place the copied block's top-left corner under the cursor when possible,
+    // otherwise fall back to the last selection origin or the board origin.
+    const base = lastHoverGrid || selectionOrigin || { x: 0, y: 0 };
+
+    const placementError = validatePlacement(base.x, base.y, copiedSelection);
+    if (placementError) {
+        alert(`Cannot paste here: ${placementError}`);
+        return;
+    }
+
+    saveStateToHistory();
+
+    const newSelection = new Set();
+    for (const item of copiedSelection) {
+        const x = base.x + item.dx;
+        const y = base.y + item.dy;
+        placeTileAt(item, x, y);
+        newSelection.add(tileKey(x, y));
+    }
+
+    selectedTiles = newSelection;
+    selectionOrigin = { x: base.x, y: base.y };
+    setSelectionStatus(`Pasted ${copiedSelection.length} tile(s).`);
+    drawBoard();
+    updateInfo();
 }
 
 function validatePlacement(baseX, baseY, items, allowedOccupied = new Set()) {
@@ -1135,8 +1164,10 @@ function drawBoardImmediate() {
     const maxX = Math.min(board.Cols, viewMaxX);
     const maxY = Math.min(board.Rows, viewMaxY);
     
-    // Draw grid (only visible portion)
-    if (!performanceMode) {
+    // Draw grid (only visible portion). Skip it when cells are too small to
+    // see (e.g. a large board zoomed out to fit) — it would just be noise and
+    // wastes time drawing thousands of overlapping lines.
+    if (!performanceMode && cellSize * zoom >= 4) {
         ctx.strokeStyle = '#e0e0e0';
         ctx.lineWidth = 1 / zoom;
         
@@ -1289,73 +1320,73 @@ function drawBoardImmediate() {
     }
 }
 
-function drawTile(tile, useHighDetail = true) {
+function drawTile(tile, useHighDetail = true, c = ctx, scale = zoom) {
     const x = tile.x * cellSize;
     const y = tile.y * cellSize;
-    
+
     // Draw tile background
-    ctx.fillStyle = tile.color;
-    ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
-    
+    c.fillStyle = tile.color;
+    c.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+
     // Draw border
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2 / zoom; // Adjust line width for zoom
-    ctx.strokeRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
-    
+    c.strokeStyle = '#000000';
+    c.lineWidth = 2 / scale; // Adjust line width for zoom
+    c.strokeRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+
     // Skip detailed rendering in performance mode or when zoomed out
     if (performanceMode || !useHighDetail) {
         // In performance mode, still show concrete indicators
         if (tile.isConcrete && performanceMode) {
-            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-            ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+            c.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            c.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
         }
         return;
     }
-    
+
     // Draw glues if showGlues is enabled
     if (tile.glues && tile.glues.length === 4 && showGlues) {
-        ctx.fillStyle = '#000000';
-        ctx.font = `${10 / zoom}px Arial`; // Adjust font size for zoom
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        
+        c.fillStyle = '#000000';
+        c.font = `${10 / scale}px Arial`; // Adjust font size for zoom
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+
         // North
         if (tile.glues[0] && tile.glues[0] !== ' ') {
-            ctx.fillText(tile.glues[0], x + cellSize / 2, y + 8);
+            c.fillText(tile.glues[0], x + cellSize / 2, y + 8);
         }
         // East
         if (tile.glues[1] && tile.glues[1] !== ' ') {
-            ctx.fillText(tile.glues[1], x + cellSize - 8, y + cellSize / 2);
+            c.fillText(tile.glues[1], x + cellSize - 8, y + cellSize / 2);
         }
         // South
         if (tile.glues[2] && tile.glues[2] !== ' ') {
-            ctx.fillText(tile.glues[2], x + cellSize / 2, y + cellSize - 8);
+            c.fillText(tile.glues[2], x + cellSize / 2, y + cellSize - 8);
         }
         // West
         if (tile.glues[3] && tile.glues[3] !== ' ') {
-            ctx.fillText(tile.glues[3], x + 8, y + cellSize / 2);
+            c.fillText(tile.glues[3], x + 8, y + cellSize / 2);
         }
     }
-    
+
     // Draw name if exists and labels are enabled
     if (tile.name && showLabels) {
-        ctx.fillStyle = '#000000';
-        ctx.font = `bold ${12 / zoom}px Arial`; // Adjust font size for zoom
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(tile.name, x + cellSize / 2, y + cellSize / 2);
+        c.fillStyle = '#000000';
+        c.font = `bold ${12 / scale}px Arial`; // Adjust font size for zoom
+        c.textAlign = 'center';
+        c.textBaseline = 'middle';
+        c.fillText(tile.name, x + cellSize / 2, y + cellSize / 2);
     }
-    
+
     // Draw concrete indicator
     if (tile.isConcrete) {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
-        ctx.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
+        c.fillStyle = 'rgba(0, 0, 0, 0.3)';
+        c.fillRect(x + 1, y + 1, cellSize - 2, cellSize - 2);
         if (showLabels) {
-            ctx.fillStyle = '#ffffff';
-            ctx.font = `bold ${14 / zoom}px Arial`; // Adjust font size for zoom
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText('C', x + cellSize / 2, y + cellSize / 2);
+            c.fillStyle = '#ffffff';
+            c.font = `bold ${14 / scale}px Arial`; // Adjust font size for zoom
+            c.textAlign = 'center';
+            c.textBaseline = 'middle';
+            c.fillText('C', x + cellSize / 2, y + cellSize / 2);
         }
     }
 }
@@ -1584,27 +1615,9 @@ function parseXML(xmlText) {
         
         // Resize canvas with new cell size
         resizeCanvas();
-        
-        // Auto-zoom and center for large boards
-        if (totalTiles > 1000) {
-            // Calculate zoom to fit board in viewport
-            const boardWidth = board.Cols * cellSize;
-            const boardHeight = board.Rows * cellSize;
-            const zoomX = canvas.width / boardWidth;
-            const zoomY = canvas.height / boardHeight;
-            zoom = Math.min(zoomX, zoomY, 1.0) * 0.9; // 90% of fit to add padding
-            
-            // Center the board
-            panX = (canvas.width - boardWidth * zoom) / 2;
-            panY = (canvas.height - boardHeight * zoom) / 2;
-        } else {
-            // Reset zoom and pan for smaller boards
-            zoom = 1.0;
-            panX = 0;
-            panY = 0;
-        }
-        
-        drawBoard();
+
+        // Fit and center the loaded board in the viewport (works for any size).
+        centerBoardHandler();
         updateInfo();
         
         console.log('XML loaded successfully. Tiles:', totalTiles, 'Cell size:', cellSize, 'Zoom:', zoom.toFixed(2));
@@ -1668,6 +1681,225 @@ function saveFileHandler() {
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
+}
+
+// ============================================
+// Board Export (PNG / SVG / PDF)
+// ============================================
+
+function exportBoardHandler() {
+    const format = document.getElementById('export-format').value;
+    if (format === 'png') {
+        exportPNG();
+    } else if (format === 'svg') {
+        exportSVG();
+    } else if (format === 'pdf') {
+        exportPDF();
+    }
+}
+
+function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+// Render the whole board to a fresh canvas at 1:1 scale (no zoom/pan/selection),
+// reused by both the PNG and PDF exporters.
+function createBoardImageCanvas() {
+    const exportCanvas = document.createElement('canvas');
+    exportCanvas.width = Math.max(1, board.Cols * cellSize);
+    exportCanvas.height = Math.max(1, board.Rows * cellSize);
+    const c = exportCanvas.getContext('2d');
+
+    c.fillStyle = '#ffffff';
+    c.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+
+    if (!performanceMode) {
+        c.strokeStyle = '#e0e0e0';
+        c.lineWidth = 1;
+        c.beginPath();
+        for (let i = 0; i <= board.Cols; i++) {
+            c.moveTo(i * cellSize, 0);
+            c.lineTo(i * cellSize, board.Rows * cellSize);
+        }
+        for (let j = 0; j <= board.Rows; j++) {
+            c.moveTo(0, j * cellSize);
+            c.lineTo(board.Cols * cellSize, j * cellSize);
+        }
+        c.stroke();
+    }
+
+    for (let p of board.Polyominoes) {
+        for (let tile of p.Tiles) {
+            drawTile(tile, true, c, 1);
+        }
+    }
+    for (let conc of board.ConcreteTiles) {
+        drawTile(conc, true, c, 1);
+    }
+
+    return exportCanvas;
+}
+
+function exportPNG() {
+    const imageCanvas = createBoardImageCanvas();
+    imageCanvas.toBlob((blob) => {
+        downloadBlob(blob, 'tumbletiles_board.png');
+    }, 'image/png');
+}
+
+function exportSVG() {
+    const width = board.Cols * cellSize;
+    const height = board.Rows * cellSize;
+    const parts = [];
+
+    parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`);
+    parts.push(`<rect width="${width}" height="${height}" fill="#ffffff"/>`);
+
+    if (!performanceMode) {
+        let gridPath = '';
+        for (let i = 0; i <= board.Cols; i++) {
+            gridPath += `M${i * cellSize} 0V${height}`;
+        }
+        for (let j = 0; j <= board.Rows; j++) {
+            gridPath += `M0 ${j * cellSize}H${width}`;
+        }
+        parts.push(`<path d="${gridPath}" stroke="#e0e0e0" stroke-width="1" fill="none"/>`);
+    }
+
+    const tiles = [];
+    for (let p of board.Polyominoes) {
+        for (let tile of p.Tiles) tiles.push(tile);
+    }
+    for (let conc of board.ConcreteTiles) tiles.push(conc);
+
+    for (let tile of tiles) {
+        parts.push(tileToSvg(tile));
+    }
+
+    parts.push('</svg>');
+
+    const blob = new Blob([parts.join('\n')], { type: 'image/svg+xml' });
+    downloadBlob(blob, 'tumbletiles_board.svg');
+}
+
+function tileToSvg(tile) {
+    const x = tile.x * cellSize + 1;
+    const y = tile.y * cellSize + 1;
+    const size = cellSize - 2;
+    const cx = tile.x * cellSize + cellSize / 2;
+    const cy = tile.y * cellSize + cellSize / 2;
+    let out = `<g>`;
+    out += `<rect x="${x}" y="${y}" width="${size}" height="${size}" fill="${escapeXml(tile.color)}" stroke="#000000" stroke-width="2"/>`;
+
+    const detailed = !performanceMode;
+
+    if (detailed && tile.glues && tile.glues.length === 4 && showGlues) {
+        const glueStyle = `font-family="Arial" font-size="10" text-anchor="middle" fill="#000000"`;
+        if (tile.glues[0] && tile.glues[0] !== ' ') {
+            out += `<text x="${cx}" y="${tile.y * cellSize + 11}" ${glueStyle}>${escapeXml(tile.glues[0])}</text>`;
+        }
+        if (tile.glues[1] && tile.glues[1] !== ' ') {
+            out += `<text x="${tile.x * cellSize + cellSize - 8}" y="${cy + 3}" ${glueStyle}>${escapeXml(tile.glues[1])}</text>`;
+        }
+        if (tile.glues[2] && tile.glues[2] !== ' ') {
+            out += `<text x="${cx}" y="${tile.y * cellSize + cellSize - 5}" ${glueStyle}>${escapeXml(tile.glues[2])}</text>`;
+        }
+        if (tile.glues[3] && tile.glues[3] !== ' ') {
+            out += `<text x="${tile.x * cellSize + 8}" y="${cy + 3}" ${glueStyle}>${escapeXml(tile.glues[3])}</text>`;
+        }
+    }
+
+    if (detailed && tile.name && showLabels) {
+        out += `<text x="${cx}" y="${cy + 4}" font-family="Arial" font-size="12" font-weight="bold" text-anchor="middle" fill="#000000">${escapeXml(tile.name)}</text>`;
+    }
+
+    if (tile.isConcrete) {
+        out += `<rect x="${x}" y="${y}" width="${size}" height="${size}" fill="#000000" fill-opacity="0.3"/>`;
+        if (detailed && showLabels) {
+            out += `<text x="${cx}" y="${cy + 5}" font-family="Arial" font-size="14" font-weight="bold" text-anchor="middle" fill="#ffffff">C</text>`;
+        }
+    }
+
+    out += `</g>`;
+    return out;
+}
+
+// Builds a minimal single-page PDF that embeds a JPEG snapshot of the board.
+// JPEG + DCTDecode keeps it dependency-free (no external PDF library required).
+function exportPDF() {
+    const imageCanvas = createBoardImageCanvas();
+    const jpegDataUrl = imageCanvas.toDataURL('image/jpeg', 0.95);
+    const base64 = jpegDataUrl.split(',')[1];
+    const binary = atob(base64);
+    const imgBytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        imgBytes[i] = binary.charCodeAt(i);
+    }
+
+    const imgW = imageCanvas.width;
+    const imgH = imageCanvas.height;
+
+    const encode = (str) => {
+        const arr = new Uint8Array(str.length);
+        for (let i = 0; i < str.length; i++) {
+            arr[i] = str.charCodeAt(i) & 0xff;
+        }
+        return arr;
+    };
+
+    const chunks = [];
+    let offset = 0;
+    const offsets = [];
+    const pushBytes = (bytes) => {
+        chunks.push(bytes);
+        offset += bytes.length;
+    };
+    const pushStr = (str) => pushBytes(encode(str));
+
+    pushStr('%PDF-1.3\n');
+
+    offsets[1] = offset;
+    pushStr('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+
+    offsets[2] = offset;
+    pushStr('2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n');
+
+    offsets[3] = offset;
+    pushStr(`3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${imgW} ${imgH}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>\nendobj\n`);
+
+    offsets[4] = offset;
+    pushStr(`4 0 obj\n<< /Type /XObject /Subtype /Image /Width ${imgW} /Height ${imgH} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${imgBytes.length} >>\nstream\n`);
+    pushBytes(imgBytes);
+    pushStr('\nendstream\nendobj\n');
+
+    const content = `q\n${imgW} 0 0 ${imgH} 0 0 cm\n/Im0 Do\nQ\n`;
+    offsets[5] = offset;
+    pushStr(`5 0 obj\n<< /Length ${content.length} >>\nstream\n${content}endstream\nendobj\n`);
+
+    const xrefOffset = offset;
+    let xref = 'xref\n0 6\n0000000000 65535 f \n';
+    for (let i = 1; i <= 5; i++) {
+        xref += String(offsets[i]).padStart(10, '0') + ' 00000 n \n';
+    }
+    pushStr(xref);
+    pushStr(`trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+
+    const total = chunks.reduce((sum, c) => sum + c.length, 0);
+    const pdfBytes = new Uint8Array(total);
+    let pos = 0;
+    for (const c of chunks) {
+        pdfBytes.set(c, pos);
+        pos += c.length;
+    }
+
+    downloadBlob(new Blob([pdfBytes], { type: 'application/pdf' }), 'tumbletiles_board.pdf');
 }
 
 async function loadExampleHandler() {

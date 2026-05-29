@@ -169,7 +169,7 @@ header p {
     align-items: center;
     justify-content: flex-start;
     background: #ffffff;
-    overflow: auto;
+    overflow: hidden;
     height: 100vh;
 }
 
